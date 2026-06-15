@@ -39,7 +39,7 @@ class MappingAlgorithm : public ::testing::Test {};
 
 TEST_F(MappingAlgorithm, FirstCallReturnsWorkingStatus) {
     auto output_map = makeOutputMap();
-    MappingAlgorithmImpl algo(defaultDrone(), output_map);
+    MappingAlgorithmImpl algo({}, {}, defaultDrone(), output_map);
     const auto state = stateAt(50, 50, 50);
     const auto cmd = algo.nextStep(state, nullptr);
     EXPECT_EQ(cmd.status, types::AlgorithmStatus::Working);
@@ -48,7 +48,7 @@ TEST_F(MappingAlgorithm, FirstCallReturnsWorkingStatus) {
 
 TEST_F(MappingAlgorithm, FirstCallRequestsScan) {
     auto output_map = makeOutputMap();
-    MappingAlgorithmImpl algo(defaultDrone(), output_map);
+    MappingAlgorithmImpl algo({}, {}, defaultDrone(), output_map);
     const auto state = stateAt(50, 50, 50);
     const auto cmd = algo.nextStep(state, nullptr);
     EXPECT_TRUE(cmd.scan_orientation.has_value());
@@ -56,7 +56,7 @@ TEST_F(MappingAlgorithm, FirstCallRequestsScan) {
 
 TEST_F(MappingAlgorithm, MultipleCallsReturnConsistentCommands) {
     auto output_map = makeOutputMap();
-    MappingAlgorithmImpl algo(defaultDrone(), output_map);
+    MappingAlgorithmImpl algo({}, {}, defaultDrone(), output_map);
     const auto state = stateAt(50, 50, 50);
     // First several calls should be rotation scan steps
     for (int i = 0; i < 8; ++i) {
@@ -76,7 +76,7 @@ TEST_F(MappingAlgorithm, EventuallyFinishesOnSmallMap) {
         0.0*z_extent[cm], 50.0*z_extent[cm],
     };
     Map3DImpl output_map(tiny_bounds, 50.0*cm);
-    MappingAlgorithmImpl algo(defaultDrone(), output_map);
+    MappingAlgorithmImpl algo({}, {}, defaultDrone(), output_map);
     const auto state = stateAt(25, 25, 25);
 
     bool finished = false;

@@ -27,7 +27,7 @@ private:
 
     using Cell3D = std::pair<GridCell2D, int>;
 
-    // Populated on first nextStep() call from _drone_config and _output_map
+    // Populated on first nextStep() call from drone_config_ and output_map_
     double nav_step_cm_    = 50.0;
     double max_rotate_deg_ = 45.0;
     double max_elevate_cm_ = 40.0;

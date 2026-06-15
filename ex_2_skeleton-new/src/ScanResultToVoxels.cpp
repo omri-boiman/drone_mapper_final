@@ -5,57 +5,158 @@
 #include <limits>
 
 namespace drone_mapper {
+namespace {
 
-std::vector<types::MappedVoxel> ScanResultToVoxels::convert(const Position3D& scan_origin,
-                                                            const Orientation& drone_heading,
-                                                            const types::LidarScanResult& scan) {
-    std::vector<types::MappedVoxel> voxels;
+[[nodiscard]] bool isZeroDistance(PhysicalLength distance) {
+    return distance == 0.0 * cm;
+}
 
-    constexpr double step_cm = 1.0;
-    constexpr double miss_threshold = 1e15; // std::numeric_limits<double>::max() means no hit
+[[nodiscard]] bool isMissDistance(PhysicalLength distance) {
+    return distance.force_numerical_value_in(cm) == std::numeric_limits<double>::max();
+}
 
-    for (const auto& lidar_hit : scan) {
-        const double hit_cm = lidar_hit.distance.force_numerical_value_in(cm);
-        const bool is_hit = hit_cm < miss_threshold;
+// LidarHit angles are relative to the scan direction. The map update needs a
+// world-facing beam direction, so we add the drone heading.
+[[nodiscard]] Orientation absoluteBeamOrientation(const Orientation& drone_heading,
+                                                  const Orientation& relative_beam) {
+    return Orientation{
+        relative_beam.horizontal + drone_heading.horizontal,
+        relative_beam.altitude + drone_heading.altitude,
+    };
+}
 
-        const Orientation abs_beam{
-            drone_heading.horizontal + lidar_hit.angle.horizontal,
-            drone_heading.altitude   + lidar_hit.angle.altitude,
-        };
+// Converts a distance along a beam into a world-space position. Could have been an external util and used with MockLidar.
+[[nodiscard]] Position3D pointAlongBeam(const Position3D& origin,
+                                        const Orientation& beam_orientation,
+                                        PhysicalLength distance) {
+    const auto cos_altitude = si::cos(beam_orientation.altitude);
+    const auto dx = cos_altitude * si::cos(beam_orientation.horizontal);
+    const auto dy = cos_altitude * si::sin(beam_orientation.horizontal);
+    const auto dz = si::sin(beam_orientation.altitude);
 
-        const auto cos_alt = si::cos(abs_beam.altitude);
-        const double dir_x = (cos_alt * si::cos(abs_beam.horizontal)).force_numerical_value_in(mp::one);
-        const double dir_y = (cos_alt * si::sin(abs_beam.horizontal)).force_numerical_value_in(mp::one);
-        const double dir_z = si::sin(abs_beam.altitude).force_numerical_value_in(mp::one);
+    const double distance_cm = distance.force_numerical_value_in(cm);
+    const double dir_x = dx.force_numerical_value_in(mp::one);
+    const double dir_y = dy.force_numerical_value_in(mp::one);
+    const double dir_z = dz.force_numerical_value_in(mp::one);
 
-        const double origin_x = scan_origin.x.force_numerical_value_in(cm);
-        const double origin_y = scan_origin.y.force_numerical_value_in(cm);
-        const double origin_z = scan_origin.z.force_numerical_value_in(cm);
+    return Position3D{
+        origin.x + dir_x * distance_cm * x_extent[cm],
+        origin.y + dir_y * distance_cm * y_extent[cm],
+        origin.z + dir_z * distance_cm * z_extent[cm],
+    };
+}
 
-        if (!is_hit) continue;
-
-        const double empty_end = hit_cm - step_cm;
-
-        for (double d = 0.0; d <= empty_end; d += step_cm) {
-            const Position3D pos{
-                (origin_x + dir_x * d) * x_extent[cm],
-                (origin_y + dir_y * d) * y_extent[cm],
-                (origin_z + dir_z * d) * z_extent[cm],
-            };
-            voxels.push_back({pos, types::VoxelOccupancy::Empty});
-        }
-
-        if (is_hit && hit_cm > 0.0) {
-            const Position3D hit_pos{
-                (origin_x + dir_x * hit_cm) * x_extent[cm],
-                (origin_y + dir_y * hit_cm) * y_extent[cm],
-                (origin_z + dir_z * hit_cm) * z_extent[cm],
-            };
-            voxels.push_back({hit_pos, types::VoxelOccupancy::Occupied});
-        }
+// Evidence strength for conflicting writes to the same voxel.
+// Occupied is a measured hit, Empty is proven free space, and
+// PotentiallyOccupied is only uncertainty from a too-close hit.
+[[nodiscard]] int occupancyPriority(types::VoxelOccupancy occupancy) {
+    switch (occupancy) {
+    case types::VoxelOccupancy::Occupied:
+        return 3;
+    case types::VoxelOccupancy::Empty:
+        return 2;
+    case types::VoxelOccupancy::PotentiallyOccupied:
+        return 1;
+    case types::VoxelOccupancy::Unmapped:
+    case types::VoxelOccupancy::OutOfBounds:
+        return 0;
     }
 
-    return voxels;
+    return 0;
+}
+
+void setIfStronger(IMutableMap3D& output_map,
+                   const Position3D& position,
+                   types::VoxelOccupancy value) {
+    if (!output_map.isInBounds(position)) {
+        return;
+    }
+
+    const types::VoxelOccupancy current_value = output_map.atVoxel(position);
+    if (occupancyPriority(value) > occupancyPriority(current_value)) {
+        output_map.set(position, value);
+    }
+}
+
+// Walks a beam segment and applies the same observation to each sampled point.
+void markBeamSegment(IMutableMap3D& output_map,
+                     const Position3D& scan_origin,
+                     const Orientation& beam_orientation,
+                     PhysicalLength start_distance,
+                     PhysicalLength end_distance,
+                     PhysicalLength step,
+                     types::VoxelOccupancy value) {
+    for (PhysicalLength distance = start_distance; distance <= end_distance; distance += step) {
+        const Position3D current_point = pointAlongBeam(scan_origin, beam_orientation, distance);
+        if (!output_map.isInBounds(current_point)) {
+            break;
+        }
+        setIfStronger(output_map, current_point, value);
+    }
+}
+
+} // namespace
+
+void ScanResultToVoxels::applyToMap(IMutableMap3D& output_map,
+                                    const Position3D& scan_origin,
+                                    const Orientation& drone_heading,
+                                    const types::LidarScanResult& scan,
+                                    const types::LidarConfigData& lidar_config) {
+    if (!output_map.isInBounds(scan_origin)) {
+        return;
+    }
+
+    // Use a sub-voxel step like MockLidar so we do not skip thin voxels along
+    // diagonal rays.
+    const PhysicalLength step = 0.1 * output_map.getMapConfig().resolution;
+    if (step <= 0.0 * cm) {
+        return;
+    }
+
+    for (const types::LidarHit& hit : scan) {
+        const Orientation beam_orientation = absoluteBeamOrientation(drone_heading, hit.angle);
+
+        if (isZeroDistance(hit.distance)) {
+            // Distance 0 means the hit happened before z_min. The exact voxel
+            // is unknown, so mark the near segment as uncertain.
+            markBeamSegment(output_map,
+                            scan_origin,
+                            beam_orientation,
+                            0.0 * cm,
+                            lidar_config.z_min,
+                            step,
+                            types::VoxelOccupancy::PotentiallyOccupied);
+            continue;
+        }
+
+        if (isMissDistance(hit.distance)) {
+            // A miss means the beam found no obstacle through the measurable
+            // range, so sampled points along the ray are empty.
+            markBeamSegment(output_map,
+                            scan_origin,
+                            beam_orientation,
+                            0.0 * cm,
+                            lidar_config.z_max,
+                            step,
+                            types::VoxelOccupancy::Empty);
+            continue;
+        }
+
+        if (hit.distance > 0.0 * cm) {
+            // A normal hit proves the path before the hit is empty and the hit
+            // position itself is occupied.
+            markBeamSegment(output_map,
+                            scan_origin,
+                            beam_orientation,
+                            0.0 * cm,
+                            hit.distance,
+                            step,
+                            types::VoxelOccupancy::Empty);
+            setIfStronger(output_map,
+                          pointAlongBeam(scan_origin, beam_orientation, hit.distance),
+                          types::VoxelOccupancy::Occupied);
+        }
+    }
 }
 
 } // namespace drone_mapper

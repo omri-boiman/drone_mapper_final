@@ -52,12 +52,13 @@ SimulationRunFactoryImpl::create(const types::SimulationConfigData& simulation,
     // Mock hardware
     auto gps = std::make_unique<MockGPS>(
         simulation.initial_drone_position,
-        Orientation{simulation.initial_angle, 0.0 * altitude_angle[deg]});
+        Orientation{simulation.initial_angle, 0.0 * altitude_angle[deg]},
+        mission.gps_resolution);
     auto movement   = std::make_unique<MockMovement>(*gps, *hidden_map, drone);
     auto lidar_impl = std::make_unique<MockLidar>(lidar, *hidden_map, *gps);
 
-    // Algorithm gets drone config and output map; derives bounds from output_map.getMapConfig()
-    auto algorithm = std::make_unique<MappingAlgorithmImpl>(drone, *output_map);
+    // Algorithm gets full configs and output map; derives bounds from output_map.getMapConfig()
+    auto algorithm = std::make_unique<MappingAlgorithmImpl>(mission, lidar, drone, *output_map);
 
     // Unique output filename per (sim × mission × drone × lidar) combo
     std::filesystem::create_directories(output_path);
@@ -72,7 +73,7 @@ SimulationRunFactoryImpl::create(const types::SimulationConfigData& simulation,
     const std::filesystem::path output_map_file = output_path / fname;
 
     auto drone_ctrl = std::make_unique<DroneControlImpl>(
-        drone, mission, *lidar_impl, *gps, *movement, *output_map, *algorithm);
+        drone, mission, lidar, *lidar_impl, *gps, *movement, *output_map, *algorithm);
 
     auto mission_ctrl = std::make_unique<MissionControlImpl>(
         mission, drone, *hidden_map, *output_map, *drone_ctrl, output_map_file);

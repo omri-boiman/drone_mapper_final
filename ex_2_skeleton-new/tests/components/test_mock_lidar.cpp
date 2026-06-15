@@ -41,7 +41,8 @@ TEST_F(MockLidar, ScanOnEmptyMapReturnsAllMisses) {
     auto map = emptyMap();
     dm::MockGPS gps{
         {0.0*dm::x_extent[dm::cm], 0.0*dm::y_extent[dm::cm], 0.0*dm::z_extent[dm::cm]},
-        {0.0*dm::horizontal_angle[dm::deg], 0.0*dm::altitude_angle[dm::deg]}};
+        {0.0*dm::horizontal_angle[dm::deg], 0.0*dm::altitude_angle[dm::deg]},
+        10.0*dm::cm};
     dm::MockLidar lidar(defaultLidar(), map, gps);
 
     const auto result = lidar.scan({0.0*dm::horizontal_angle[dm::deg], 0.0*dm::altitude_angle[dm::deg]});
@@ -55,7 +56,8 @@ TEST_F(MockLidar, ScanDetectsOccupiedVoxel) {
     // Drone at (0, 40, 20) facing east (+X); voxel at (20, 40, 20)
     dm::MockGPS gps{
         {0.0*dm::x_extent[dm::cm], 40.0*dm::y_extent[dm::cm], 20.0*dm::z_extent[dm::cm]},
-        {0.0*dm::horizontal_angle[dm::deg], 0.0*dm::altitude_angle[dm::deg]}};
+        {0.0*dm::horizontal_angle[dm::deg], 0.0*dm::altitude_angle[dm::deg]},
+        10.0*dm::cm};
     dm::types::LidarConfigData lidar_cfg{5.0*dm::cm, 60.0*dm::cm, 2.5*dm::cm, 1};
     dm::MockLidar lidar(lidar_cfg, map, gps);
 
@@ -69,7 +71,8 @@ TEST_F(MockLidar, BeamCountMatchesFovCircles) {
     auto map = emptyMap();
     dm::MockGPS gps{
         {50.0*dm::x_extent[dm::cm], 50.0*dm::y_extent[dm::cm], 50.0*dm::z_extent[dm::cm]},
-        {0.0*dm::horizontal_angle[dm::deg], 0.0*dm::altitude_angle[dm::deg]}};
+        {0.0*dm::horizontal_angle[dm::deg], 0.0*dm::altitude_angle[dm::deg]},
+        10.0*dm::cm};
     // 3 circles: 1 + 4 + 16 = 21 beams
     dm::types::LidarConfigData lidar_cfg{5.0*dm::cm, 80.0*dm::cm, 2.5*dm::cm, 3};
     dm::MockLidar lidar(lidar_cfg, map, gps);
@@ -82,7 +85,8 @@ TEST_F(MockLidar, ZeroFovCirclesReturnsEmpty) {
     auto map = emptyMap();
     dm::MockGPS gps{
         {10.0*dm::x_extent[dm::cm], 10.0*dm::y_extent[dm::cm], 10.0*dm::z_extent[dm::cm]},
-        {0.0*dm::horizontal_angle[dm::deg], 0.0*dm::altitude_angle[dm::deg]}};
+        {0.0*dm::horizontal_angle[dm::deg], 0.0*dm::altitude_angle[dm::deg]},
+        10.0*dm::cm};
     dm::types::LidarConfigData lidar_cfg{5.0*dm::cm, 80.0*dm::cm, 2.5*dm::cm, 0};
     dm::MockLidar lidar(lidar_cfg, map, gps);
 
@@ -94,7 +98,8 @@ TEST_F(MockLidar, MissDistanceIsMaxDouble) {
     auto map = emptyMap();
     dm::MockGPS gps{
         {50.0*dm::x_extent[dm::cm], 50.0*dm::y_extent[dm::cm], 50.0*dm::z_extent[dm::cm]},
-        {0.0*dm::horizontal_angle[dm::deg], 0.0*dm::altitude_angle[dm::deg]}};
+        {0.0*dm::horizontal_angle[dm::deg], 0.0*dm::altitude_angle[dm::deg]},
+        10.0*dm::cm};
     dm::types::LidarConfigData lidar_cfg{5.0*dm::cm, 80.0*dm::cm, 2.5*dm::cm, 1};
     dm::MockLidar lidar(lidar_cfg, map, gps);
 

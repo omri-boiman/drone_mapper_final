@@ -36,6 +36,7 @@ class MockMap_DC : public IMutableMap3D {
 public:
     MOCK_METHOD(types::VoxelOccupancy, atVoxel, (const Position3D&), (const, override));
     MOCK_METHOD(types::MapConfig,      getMapConfig, (), (const, override));
+    MOCK_METHOD(bool, isInBounds, (const Position3D&), (const, override));
     MOCK_METHOD(void, set,  (const Position3D&, types::VoxelOccupancy), (override));
     MOCK_METHOD(void, save, (const std::filesystem::path&), (const, override));
 };
@@ -47,8 +48,9 @@ public:
             return types::VoxelOccupancy::Empty;
         }
         types::MapConfig getMapConfig() const override { return {}; }
+        bool isInBounds(const Position3D&) const override { return false; }
     };
-    MockAlgorithm_DC() : IMappingAlgorithm(types::DroneConfigData{}, null_map_) {}
+    MockAlgorithm_DC() : IMappingAlgorithm(types::MissionConfigData{}, types::LidarConfigData{}, types::DroneConfigData{}, null_map_) {}
     MOCK_METHOD(types::MappingStepCommand, nextStep,
                 (const types::DroneState&, const types::LidarScanResult*), (override));
 private:
@@ -92,6 +94,7 @@ protected:
         ON_CALL(lidar, scan(_)).WillByDefault(Return(types::LidarScanResult{}));
         ON_CALL(map, atVoxel(_)).WillByDefault(Return(types::VoxelOccupancy::Empty));
         ON_CALL(map, getMapConfig()).WillByDefault(Return(defaultMapConfig()));
+        ON_CALL(map, isInBounds(_)).WillByDefault(Return(true));
         ON_CALL(algo, nextStep(_, _)).WillByDefault(Return(
             types::MappingStepCommand{
                 std::nullopt,
@@ -112,20 +115,20 @@ protected:
 
 TEST_F(DroneControl, StepCallsLidarScan) {
     EXPECT_CALL(lidar, scan(_)).Times(AtLeast(1));
-    DroneControlImpl ctrl(defaultDrone(), defaultMission(), lidar, gps, movement, map, algo);
+    DroneControlImpl ctrl(defaultDrone(), defaultMission(), {}, lidar, gps, movement, map, algo);
     std::ignore = ctrl.step();
 }
 
 TEST_F(DroneControl, StepCallsNextStep) {
     EXPECT_CALL(algo, nextStep(_, _)).Times(AtLeast(1));
-    DroneControlImpl ctrl(defaultDrone(), defaultMission(), lidar, gps, movement, map, algo);
+    DroneControlImpl ctrl(defaultDrone(), defaultMission(), {}, lidar, gps, movement, map, algo);
     std::ignore = ctrl.step();
 }
 
 TEST_F(DroneControl, StepReturnsCompletedWhenAlgorithmReturnsFinished) {
     ON_CALL(algo, nextStep(_, _)).WillByDefault(Return(
         types::MappingStepCommand{std::nullopt, std::nullopt, types::AlgorithmStatus::Finished}));
-    DroneControlImpl ctrl(defaultDrone(), defaultMission(), lidar, gps, movement, map, algo);
+    DroneControlImpl ctrl(defaultDrone(), defaultMission(), {}, lidar, gps, movement, map, algo);
     const auto result = ctrl.step();
     EXPECT_EQ(result.status, types::DroneStepStatus::Completed);
 }
@@ -143,7 +146,7 @@ TEST_F(DroneControl, StepReturnsErrorOnCollision) {
     ON_CALL(movement, advance(_)).WillByDefault(
         Return(types::MovementResult{false, "DRONE_HITS_OBSTACLE"}));
 
-    DroneControlImpl ctrl(defaultDrone(), defaultMission(), lidar, gps, movement, map, algo);
+    DroneControlImpl ctrl(defaultDrone(), defaultMission(), {}, lidar, gps, movement, map, algo);
     const auto result = ctrl.step();
     EXPECT_EQ(result.status, types::DroneStepStatus::Error);
     EXPECT_EQ(result.message, "DRONE_HITS_OBSTACLE");
@@ -159,13 +162,13 @@ TEST_F(DroneControl, StepReturnsContinueOnSuccessfulAdvance) {
             std::nullopt,
             types::AlgorithmStatus::Working
         }));
-    DroneControlImpl ctrl(defaultDrone(), defaultMission(), lidar, gps, movement, map, algo);
+    DroneControlImpl ctrl(defaultDrone(), defaultMission(), {}, lidar, gps, movement, map, algo);
     const auto result = ctrl.step();
     EXPECT_EQ(result.status, types::DroneStepStatus::Continue);
 }
 
 TEST_F(DroneControl, StateReflectsGPSValues) {
-    DroneControlImpl ctrl(defaultDrone(), defaultMission(), lidar, gps, movement, map, algo);
+    DroneControlImpl ctrl(defaultDrone(), defaultMission(), {}, lidar, gps, movement, map, algo);
     const auto s = ctrl.state();
     EXPECT_DOUBLE_EQ(s.position.x.force_numerical_value_in(cm), 100.0);
     EXPECT_DOUBLE_EQ(s.position.y.force_numerical_value_in(cm), 100.0);

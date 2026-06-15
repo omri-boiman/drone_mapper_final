@@ -1,6 +1,5 @@
 #include <drone_mapper/MappingAlgorithmImpl.h>
 #include <drone_mapper/IMap3D.h>
-#include <drone_mapper/ScanResultToVoxels.h>
 
 #include <algorithm>
 #include <array>
@@ -16,11 +15,11 @@
 namespace drone_mapper {
 
 void MappingAlgorithmImpl::initialize(const types::DroneState& state) {
-    nav_step_cm_    = _drone_config.max_advance.force_numerical_value_in(cm);
-    max_rotate_deg_ = _drone_config.max_rotate.force_numerical_value_in(deg);
-    max_elevate_cm_ = _drone_config.max_elevate.force_numerical_value_in(cm);
+    nav_step_cm_    = drone_config_.max_advance.force_numerical_value_in(cm);
+    max_rotate_deg_ = drone_config_.max_rotate.force_numerical_value_in(deg);
+    max_elevate_cm_ = drone_config_.max_elevate.force_numerical_value_in(cm);
 
-    const auto map_cfg = _output_map.getMapConfig();
+    const auto map_cfg = output_map_.getMapConfig();
     min_x_cm_      = map_cfg.boundaries.min_x.force_numerical_value_in(cm);
     max_x_cm_      = map_cfg.boundaries.max_x.force_numerical_value_in(cm);
     min_y_cm_      = map_cfg.boundaries.min_y.force_numerical_value_in(cm);
@@ -124,7 +123,7 @@ MappingAlgorithmImpl::findNearest3DFrontier(const GridCell2D& from,
 bool MappingAlgorithmImpl::hasClearance(const GridCell2D& from, const GridCell2D& to,
                                          int level_idx, double height_cm) const {
     // radius is the actual sphere radius now (not half of dimensions)
-    const double radius_cm = _drone_config.radius.force_numerical_value_in(cm);
+    const double radius_cm = drone_config_.radius.force_numerical_value_in(cm);
 
     const double tx = to.x * nav_step_cm_;
     const double ty = to.y * nav_step_cm_;
@@ -292,11 +291,30 @@ types::MappingStepCommand MappingAlgorithmImpl::nextStep(
     if (!initialized_) initialize(state);
     if (done_) return {std::nullopt, std::nullopt, types::AlgorithmStatus::Finished};
 
-    // Process incoming scan result
+    // Process incoming scan result — extract occupied hit positions inline
     if (latest_scan != nullptr) {
-        const auto voxels = ScanResultToVoxels::convert(
-            state.position, state.heading, *latest_scan);
-        applyFiltered(voxels);
+        constexpr double miss_threshold = std::numeric_limits<double>::max() / 2.0;
+        std::vector<types::MappedVoxel> hits;
+        for (const auto& hit : *latest_scan) {
+            const double d_cm = hit.distance.force_numerical_value_in(cm);
+            if (d_cm <= 0.0 || d_cm > miss_threshold) continue;
+            const double horiz_deg =
+                (state.heading.horizontal + hit.angle.horizontal).force_numerical_value_in(deg);
+            const double alt_deg =
+                (state.heading.altitude + hit.angle.altitude).force_numerical_value_in(deg);
+            const double horiz_rad = horiz_deg * std::numbers::pi / 180.0;
+            const double alt_rad   = alt_deg   * std::numbers::pi / 180.0;
+            const double ca = std::cos(alt_rad);
+            const double ox = state.position.x.force_numerical_value_in(cm);
+            const double oy = state.position.y.force_numerical_value_in(cm);
+            const double oz = state.position.z.force_numerical_value_in(cm);
+            hits.push_back({{
+                (ox + ca * std::cos(horiz_rad) * d_cm) * x_extent[cm],
+                (oy + ca * std::sin(horiz_rad) * d_cm) * y_extent[cm],
+                (oz + std::sin(alt_rad) * d_cm)        * z_extent[cm],
+            }, types::VoxelOccupancy::Occupied});
+        }
+        applyFiltered(hits);
     }
 
     // Drain pending commands (rotation scan or navigation)

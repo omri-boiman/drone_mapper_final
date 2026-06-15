@@ -7,6 +7,7 @@ namespace drone_mapper {
 
 DroneControlImpl::DroneControlImpl(types::DroneConfigData drone,
                                    types::MissionConfigData mission,
+                                   types::LidarConfigData lidar_config,
                                    ILidar& lidar,
                                    IGPS& gps,
                                    IDroneMovement& movement,
@@ -14,6 +15,7 @@ DroneControlImpl::DroneControlImpl(types::DroneConfigData drone,
                                    IMappingAlgorithm& mapping_algorithm)
     : drone_(std::move(drone)),
       mission_(std::move(mission)),
+      lidar_config_(lidar_config),
       lidar_(lidar),
       gps_(gps),
       movement_(movement),
@@ -65,10 +67,8 @@ types::DroneStepResult DroneControlImpl::step() {
         const types::LidarScanResult scan = lidar_.scan(*cmd.scan_orientation);
         latest_scan_ = scan;
 
-        const auto voxels = ScanResultToVoxels::convert(
-            post_move_state.position, post_move_state.heading, scan);
-        for (const auto& v : voxels)
-            output_map_.set(v.position, v.value);
+        ScanResultToVoxels::applyToMap(
+            output_map_, post_move_state.position, post_move_state.heading, scan, lidar_config_);
     }
 
     return {types::DroneStepStatus::Continue};

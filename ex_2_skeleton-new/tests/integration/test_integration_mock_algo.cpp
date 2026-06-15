@@ -21,8 +21,9 @@ public:
             return types::VoxelOccupancy::Empty;
         }
         types::MapConfig getMapConfig() const override { return {}; }
+        bool isInBounds(const Position3D&) const override { return false; }
     };
-    DoneAlgorithm() : IMappingAlgorithm(types::DroneConfigData{}, null_map_) {}
+    DoneAlgorithm() : IMappingAlgorithm(types::MissionConfigData{}, types::LidarConfigData{}, types::DroneConfigData{}, null_map_) {}
     types::MappingStepCommand nextStep(const types::DroneState&,
                                        const types::LidarScanResult*) override {
         return {std::nullopt, std::nullopt, types::AlgorithmStatus::Finished};
@@ -67,13 +68,14 @@ TEST_F(Integration, MockAlgorithmRun_CompletesImmediately) {
 
     auto gps = std::make_unique<MockGPS>(
         Position3D{50.0*x_extent[cm], 50.0*y_extent[cm], 50.0*z_extent[cm]},
-        Orientation{0.0*horizontal_angle[deg], 0.0*altitude_angle[deg]});
+        Orientation{0.0*horizontal_angle[deg], 0.0*altitude_angle[deg]},
+        10.0*cm);
     auto movement = std::make_unique<MockMovement>(*gps, *hidden_map, drone);
     auto lidar_sensor = std::make_unique<MockLidar>(lidar, *hidden_map, *gps);
     auto algorithm = std::make_unique<DoneAlgorithm>();
 
     auto drone_ctrl = std::make_unique<DroneControlImpl>(
-        drone, mission, *lidar_sensor, *gps, *movement, *output_map, *algorithm);
+        drone, mission, lidar, *lidar_sensor, *gps, *movement, *output_map, *algorithm);
 
     const std::filesystem::path out_file = "/tmp/integration_mock_algo.npy";
     auto mission_ctrl = std::make_unique<MissionControlImpl>(
@@ -106,12 +108,13 @@ TEST_F(Integration, MockAlgorithmRun_OutputMapFileExists) {
     auto output_map = std::make_unique<Map3DImpl>(bounds, 10.0*cm, Position3D{});
     auto gps = std::make_unique<MockGPS>(
         Position3D{50.0*x_extent[cm], 50.0*y_extent[cm], 50.0*z_extent[cm]},
-        Orientation{0.0*horizontal_angle[deg], 0.0*altitude_angle[deg]});
+        Orientation{0.0*horizontal_angle[deg], 0.0*altitude_angle[deg]},
+        10.0*cm);
     auto movement = std::make_unique<MockMovement>(*gps, *hidden_map, drone);
     auto lidar_sensor = std::make_unique<MockLidar>(lidar, *hidden_map, *gps);
     auto algorithm = std::make_unique<DoneAlgorithm>();
     auto drone_ctrl = std::make_unique<DroneControlImpl>(
-        drone, mission, *lidar_sensor, *gps, *movement, *output_map, *algorithm);
+        drone, mission, lidar, *lidar_sensor, *gps, *movement, *output_map, *algorithm);
     const std::filesystem::path out_file = "/tmp/integration_mock_file_check.npy";
     std::filesystem::remove(out_file);
     auto mission_ctrl = std::make_unique<MissionControlImpl>(

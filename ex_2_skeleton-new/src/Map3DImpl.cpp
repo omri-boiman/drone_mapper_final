@@ -111,6 +111,11 @@ types::MapConfig Map3DImpl::getMapConfig() const {
     return config_;
 }
 
+bool Map3DImpl::isInBounds(const Position3D& pos) const {
+    std::size_t xi = 0, yi = 0, zi = 0;
+    return toIndex(pos, xi, yi, zi);
+}
+
 void Map3DImpl::set(const Position3D& pos, types::VoxelOccupancy value) {
     if (!is_output_map_) return;
     std::size_t xi = 0, yi = 0, zi = 0;

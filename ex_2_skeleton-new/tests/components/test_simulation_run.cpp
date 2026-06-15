@@ -31,8 +31,9 @@ public:
             return types::VoxelOccupancy::Empty;
         }
         types::MapConfig getMapConfig() const override { return {}; }
+        bool isInBounds(const Position3D&) const override { return false; }
     };
-    StubAlgorithm() : IMappingAlgorithm(types::DroneConfigData{}, null_map_) {}
+    StubAlgorithm() : IMappingAlgorithm(types::MissionConfigData{}, types::LidarConfigData{}, types::DroneConfigData{}, null_map_) {}
     types::MappingStepCommand nextStep(const types::DroneState&,
                                        const types::LidarScanResult*) override {
         return {std::nullopt, std::nullopt, types::AlgorithmStatus::Finished};
@@ -85,7 +86,8 @@ TEST_F(SimulationRun, RunDelegatesToMissionControl) {
 
     auto gps_ptr = std::make_unique<MockGPS>(
         Position3D{50.0*x_extent[cm], 50.0*y_extent[cm], 50.0*z_extent[cm]},
-        Orientation{0.0*horizontal_angle[deg], 0.0*altitude_angle[deg]});
+        Orientation{0.0*horizontal_angle[deg], 0.0*altitude_angle[deg]},
+        10.0*cm);
 
     types::DroneConfigData drone_cfg{30.0*cm, 45.0*horizontal_angle[deg], 50.0*cm, 40.0*cm};
     auto hm = hiddenMap();
@@ -112,7 +114,7 @@ TEST_F(SimulationRun, RunDelegatesToMissionControl) {
 
 TEST(MockGPSTest, SetPositionReflectedByPosition) {
     MockGPS gps{{10.0*x_extent[cm], 20.0*y_extent[cm], 30.0*z_extent[cm]},
-                {0.0*horizontal_angle[deg], 0.0*altitude_angle[deg]}};
+                {0.0*horizontal_angle[deg], 0.0*altitude_angle[deg]}, 10.0*cm};
 
     gps.setPosition({99.0*x_extent[cm], 88.0*y_extent[cm], 77.0*z_extent[cm]});
     EXPECT_DOUBLE_EQ(gps.position().x.force_numerical_value_in(cm), 99.0);
@@ -121,7 +123,7 @@ TEST(MockGPSTest, SetPositionReflectedByPosition) {
 }
 
 TEST(MockGPSTest, SetHeadingReflectedByHeading) {
-    MockGPS gps{Position3D{}, {0.0*horizontal_angle[deg], 0.0*altitude_angle[deg]}};
+    MockGPS gps{Position3D{}, {0.0*horizontal_angle[deg], 0.0*altitude_angle[deg]}, 10.0*cm};
     gps.setHeading({90.0*horizontal_angle[deg], 15.0*altitude_angle[deg]});
     EXPECT_DOUBLE_EQ(gps.heading().horizontal.force_numerical_value_in(deg), 90.0);
     EXPECT_DOUBLE_EQ(gps.heading().altitude.force_numerical_value_in(deg), 15.0);
@@ -138,7 +140,7 @@ TEST(MockMovementTest, AdvanceSucceedsOnEmptyPath) {
     Map3DImpl empty_map(b, 10.0*cm, Position3D{});
     types::DroneConfigData drone_cfg{30.0*cm, 45.0*horizontal_angle[deg], 50.0*cm, 40.0*cm};
     MockGPS gps{{100.0*x_extent[cm], 100.0*y_extent[cm], 100.0*z_extent[cm]},
-                {0.0*horizontal_angle[deg], 0.0*altitude_angle[deg]}};
+                {0.0*horizontal_angle[deg], 0.0*altitude_angle[deg]}, 10.0*cm};
     MockMovement movement(gps, empty_map, drone_cfg);
 
     const auto result = movement.advance(30.0*cm);
@@ -149,7 +151,7 @@ TEST(MockMovementTest, AdvanceFailsWhenObstacleInPath) {
     Map3DImpl obstacle_map("data_maps/single_voxel_x2_y4_z2.npy", 10.0*cm);
     types::DroneConfigData drone_cfg{30.0*cm, 45.0*horizontal_angle[deg], 50.0*cm, 40.0*cm};
     MockGPS gps{{0.0*x_extent[cm], 40.0*y_extent[cm], 20.0*z_extent[cm]},
-                {0.0*horizontal_angle[deg], 0.0*altitude_angle[deg]}};
+                {0.0*horizontal_angle[deg], 0.0*altitude_angle[deg]}, 10.0*cm};
     MockMovement movement(gps, obstacle_map, drone_cfg);
 
     const auto result = movement.advance(30.0*cm);
@@ -165,7 +167,7 @@ TEST(MockMovementTest, RotateUpdatesHeading) {
     };
     Map3DImpl map(b, 10.0*cm, Position3D{});
     types::DroneConfigData drone_cfg{30.0*cm, 90.0*horizontal_angle[deg], 50.0*cm, 40.0*cm};
-    MockGPS gps{Position3D{}, {0.0*horizontal_angle[deg], 0.0*altitude_angle[deg]}};
+    MockGPS gps{Position3D{}, {0.0*horizontal_angle[deg], 0.0*altitude_angle[deg]}, 10.0*cm};
     MockMovement movement(gps, map, drone_cfg);
 
     movement.rotate(types::RotationDirection::Right, 45.0*horizontal_angle[deg]);
