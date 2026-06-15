@@ -1,9 +1,10 @@
 #include <drone_mapper/MappingAlgorithmImpl.h>
+#include <drone_mapper/IMap3D.h>
+#include <drone_mapper/ScanResultToVoxels.h>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstdlib>
 #include <functional>
 #include <limits>
 #include <map>
@@ -14,26 +15,20 @@
 
 namespace drone_mapper {
 
-MappingAlgorithmImpl::MappingAlgorithmImpl(types::MissionConfigData mission,
-                                           types::DroneConfigData drone,
-                                           types::MappingBounds bounds)
-    : mission_(std::move(mission)), drone_(drone), bounds_(bounds) {
-    nav_step_cm_    = drone_.max_advance.force_numerical_value_in(cm);
-    max_rotate_deg_ = drone_.max_rotate.force_numerical_value_in(deg);
-    max_elevate_cm_ = drone_.max_elevate.force_numerical_value_in(cm);
-
-    // Bounds come from the hidden map's MapConfig, not from MissionConfigData
-    min_x_cm_      = bounds_.min_x.force_numerical_value_in(cm);
-    max_x_cm_      = bounds_.max_x.force_numerical_value_in(cm);
-    min_y_cm_      = bounds_.min_y.force_numerical_value_in(cm);
-    max_y_cm_      = bounds_.max_y.force_numerical_value_in(cm);
-    min_height_cm_ = bounds_.min_height.force_numerical_value_in(cm);
-    max_height_cm_ = bounds_.max_height.force_numerical_value_in(cm);
-}
-
 void MappingAlgorithmImpl::initialize(const types::DroneState& state) {
-    const double start_z = state.position.z.force_numerical_value_in(cm);
+    nav_step_cm_    = _drone_config.max_advance.force_numerical_value_in(cm);
+    max_rotate_deg_ = _drone_config.max_rotate.force_numerical_value_in(deg);
+    max_elevate_cm_ = _drone_config.max_elevate.force_numerical_value_in(cm);
 
+    const auto map_cfg = _output_map.getMapConfig();
+    min_x_cm_      = map_cfg.boundaries.min_x.force_numerical_value_in(cm);
+    max_x_cm_      = map_cfg.boundaries.max_x.force_numerical_value_in(cm);
+    min_y_cm_      = map_cfg.boundaries.min_y.force_numerical_value_in(cm);
+    max_y_cm_      = map_cfg.boundaries.max_y.force_numerical_value_in(cm);
+    min_height_cm_ = map_cfg.boundaries.min_height.force_numerical_value_in(cm);
+    max_height_cm_ = map_cfg.boundaries.max_height.force_numerical_value_in(cm);
+
+    const double start_z = state.position.z.force_numerical_value_in(cm);
     const double min_flyable = min_height_cm_ + max_elevate_cm_;
     const double max_flyable = max_height_cm_ - max_elevate_cm_;
 
@@ -49,9 +44,6 @@ void MappingAlgorithmImpl::initialize(const types::DroneState& state) {
     pending_level_idx_  = -1;
     initialized_ = true;
     needs_scan_  = true;
-
-    applyFiltered(pre_init_voxels_);
-    pre_init_voxels_.clear();
 }
 
 MappingAlgorithmImpl::GridCell2D
@@ -131,7 +123,8 @@ MappingAlgorithmImpl::findNearest3DFrontier(const GridCell2D& from,
 
 bool MappingAlgorithmImpl::hasClearance(const GridCell2D& from, const GridCell2D& to,
                                          int level_idx, double height_cm) const {
-    const double half_r = drone_.dimensions.force_numerical_value_in(cm) / 2.0;
+    // radius is the actual sphere radius now (not half of dimensions)
+    const double radius_cm = _drone_config.radius.force_numerical_value_in(cm);
 
     const double tx = to.x * nav_step_cm_;
     const double ty = to.y * nav_step_cm_;
@@ -153,15 +146,15 @@ bool MappingAlgorithmImpl::hasClearance(const GridCell2D& from, const GridCell2D
     };
 
     if (moving_in_x) {
-        return !wall_at_xy(tx, ty - half_r)
-            && !wall_at_xy(tx, ty + half_r)
-            && !occupied(tx, ty, height_cm - half_r)
-            && !occupied(tx, ty, height_cm + half_r);
+        return !wall_at_xy(tx, ty - radius_cm)
+            && !wall_at_xy(tx, ty + radius_cm)
+            && !occupied(tx, ty, height_cm - radius_cm)
+            && !occupied(tx, ty, height_cm + radius_cm);
     } else {
-        return !wall_at_xy(tx - half_r, ty)
-            && !wall_at_xy(tx + half_r, ty)
-            && !occupied(tx, ty, height_cm - half_r)
-            && !occupied(tx, ty, height_cm + half_r);
+        return !wall_at_xy(tx - radius_cm, ty)
+            && !wall_at_xy(tx + radius_cm, ty)
+            && !occupied(tx, ty, height_cm - radius_cm)
+            && !occupied(tx, ty, height_cm + radius_cm);
     }
 }
 
@@ -271,7 +264,6 @@ void MappingAlgorithmImpl::enqueueNavigationTo(const GridCell2D& from,
 }
 
 void MappingAlgorithmImpl::applyFiltered(const std::vector<types::MappedVoxel>& voxels) {
-
     for (const auto& v : voxels) {
         if (v.value != types::VoxelOccupancy::Occupied) continue;
 
@@ -281,7 +273,7 @@ void MappingAlgorithmImpl::applyFiltered(const std::vector<types::MappedVoxel>& 
         const GridCell2D cell = worldToGrid(v.position);
 
         fine_wall_xy_.emplace(static_cast<int>(std::round(vx)),
-                        static_cast<int>(std::round(vy)));
+                              static_cast<int>(std::round(vy)));
 
         for (int lvl = 0; lvl < static_cast<int>(height_levels_cm_.size()); ++lvl) {
             const double level_z = height_levels_cm_[lvl];
@@ -289,36 +281,37 @@ void MappingAlgorithmImpl::applyFiltered(const std::vector<types::MappedVoxel>& 
                 obstacle_cache_[{cell, lvl}] = true;
                 frontier_3d_.erase({cell, lvl});
             }
-            
+        }
     }
 }
 
-void MappingAlgorithmImpl::applyVoxelUpdates(
-    const std::vector<types::MappedVoxel>& voxels) {
-    if (!initialized_) {
-        pre_init_voxels_.insert(pre_init_voxels_.end(), voxels.begin(), voxels.end());
-        return;
-    }
-    applyFiltered(voxels);
-}
-
-types::MovementCommand MappingAlgorithmImpl::nextMove(
+types::MappingStepCommand MappingAlgorithmImpl::nextStep(
     const types::DroneState& state,
-    const types::LidarScanResult& /*latest_scan*/) {
+    const types::LidarScanResult* latest_scan) {
 
     if (!initialized_) initialize(state);
-    if (done_) return {types::MovementCommandType::Hover};
+    if (done_) return {std::nullopt, std::nullopt, types::AlgorithmStatus::Finished};
 
+    // Process incoming scan result
+    if (latest_scan != nullptr) {
+        const auto voxels = ScanResultToVoxels::convert(
+            state.position, state.heading, *latest_scan);
+        applyFiltered(voxels);
+    }
+
+    // Drain pending commands (rotation scan or navigation)
     if (!pending_commands_.empty()) {
         const auto cmd = pending_commands_.front();
         pending_commands_.pop_front();
-        return cmd;
+        // Always request a scan so the algorithm keeps receiving obstacle data
+        const Orientation scan_req{0.0 * horizontal_angle[deg], 0.0 * altitude_angle[deg]};
+        return {cmd, scan_req, types::AlgorithmStatus::Working};
     }
 
     const GridCell2D cur_cell   = worldToGrid(state.position);
-    double sim_heading = state.heading.horizontal.force_numerical_value_in(deg);
 
     if (needs_scan_) {
+        // Arrived at a new position: update level, expand frontier, queue 360° rotation scan
         if (pending_level_idx_ >= 0) {
             height_level_index_ = static_cast<std::size_t>(pending_level_idx_);
             pending_level_idx_  = -1;
@@ -342,52 +335,59 @@ types::MovementCommand MappingAlgorithmImpl::nextMove(
             });
         }
 
-    } else {
-        const int    cur_level  = static_cast<int>(height_level_index_);
-        const double cur_height = height_levels_cm_[cur_level];
-
-        const Cell3D target = findNearest3DFrontier(cur_cell, cur_level);
-
-        if (target.first.x == std::numeric_limits<int>::min()) {
-            done_ = true;
-            return {types::MovementCommandType::Hover};
-        }
-
-        frontier_3d_.erase(target);
-        const auto [target_cell, target_level] = target;
-
-        enqueueNavigationTo(cur_cell, target_cell,
-                            cur_level, cur_height, sim_heading);
-
-        if (target_level != cur_level) {
-            const double target_h = height_levels_cm_[target_level];
-            double diff = target_h - cur_height;
-            while (std::abs(diff) > 0.1) {
-                const double step = (diff > 0.0)
-                    ? std::min( diff,  max_elevate_cm_)
-                    : std::max( diff, -max_elevate_cm_);
-                pending_commands_.push_back({
-                    types::MovementCommandType::Elevate,
-                    types::RotationDirection::Left,
-                    0.0 * horizontal_angle[deg],
-                    step * isq::length[cm],
-                });
-                diff -= step;
-            }
-            pending_level_idx_ = target_level;
-        }
-
-        needs_scan_ = true;
+        const auto cmd = pending_commands_.front();
+        pending_commands_.pop_front();
+        const Orientation scan_req{0.0 * horizontal_angle[deg], 0.0 * altitude_angle[deg]};
+        return {cmd, scan_req, types::AlgorithmStatus::Working};
     }
+
+    // Navigation phase: find nearest unvisited frontier
+    const int    cur_level  = static_cast<int>(height_level_index_);
+    const double cur_height = height_levels_cm_[cur_level];
+
+    const Cell3D target = findNearest3DFrontier(cur_cell, cur_level);
+
+    if (target.first.x == std::numeric_limits<int>::min()) {
+        done_ = true;
+        return {std::nullopt, std::nullopt, types::AlgorithmStatus::Finished};
+    }
+
+    frontier_3d_.erase(target);
+    visited_3d_.insert(target);  // prevent re-adding if drone stalls at current cell
+    const auto [target_cell, target_level] = target;
+
+    double sim_heading = state.heading.horizontal.force_numerical_value_in(deg);
+    enqueueNavigationTo(cur_cell, target_cell, cur_level, cur_height, sim_heading);
+
+    if (target_level != cur_level) {
+        const double target_h = height_levels_cm_[target_level];
+        double diff = target_h - cur_height;
+        while (std::abs(diff) > 0.1) {
+            const double step = (diff > 0.0)
+                ? std::min( diff,  max_elevate_cm_)
+                : std::max( diff, -max_elevate_cm_);
+            pending_commands_.push_back({
+                types::MovementCommandType::Elevate,
+                types::RotationDirection::Left,
+                0.0 * horizontal_angle[deg],
+                step * isq::length[cm],
+            });
+            diff -= step;
+        }
+        pending_level_idx_ = target_level;
+    }
+
+    needs_scan_ = true;
 
     if (pending_commands_.empty()) {
         done_ = true;
-        return {types::MovementCommandType::Hover};
+        return {std::nullopt, std::nullopt, types::AlgorithmStatus::FinishedWithUnmappableVoxels};
     }
 
     const auto cmd = pending_commands_.front();
     pending_commands_.pop_front();
-    return cmd;
+    const Orientation scan_req{0.0 * horizontal_angle[deg], 0.0 * altitude_angle[deg]};
+    return {cmd, scan_req, types::AlgorithmStatus::Working};
 }
 
 } // namespace drone_mapper

@@ -53,7 +53,7 @@ types::DroneConfigData YamlConfigParser::parseDrone(const std::filesystem::path&
     const YAML::Node doc = YAML::LoadFile(path.string());
     const YAML::Node dc  = doc["drone_config"];
     return {
-        nodeDouble(dc["dimensions_cm"],  30.0) * cm,
+        nodeDouble(dc["dimensions_cm"],  30.0) / 2.0 * cm,
         nodeDouble(dc["max_rotate_deg"], 45.0) * horizontal_angle[deg],
         nodeDouble(dc["max_advance_cm"], 50.0) * cm,
         nodeDouble(dc["max_elevate_cm"], 40.0) * cm,

@@ -7,6 +7,8 @@
 #include <drone_mapper/IMappingAlgorithm.h>
 #include <drone_mapper/IMutableMap3D.h>
 
+#include <optional>
+
 namespace drone_mapper {
 
 class DroneControlImpl final : public IDroneControl {
@@ -31,6 +33,7 @@ private:
     IMutableMap3D& output_map_;
     IMappingAlgorithm& mapping_algorithm_;
     std::size_t step_index_ = 0;
+    std::optional<types::LidarScanResult> latest_scan_{};
 };
 
 } // namespace drone_mapper

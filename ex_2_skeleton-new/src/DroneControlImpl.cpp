@@ -23,44 +23,53 @@ DroneControlImpl::DroneControlImpl(types::DroneConfigData drone,
 types::DroneStepResult DroneControlImpl::step() {
     const types::DroneState cur_state = state();
 
-    const types::LidarScanResult scan = lidar_.scan(
-        Orientation{0.0 * horizontal_angle[deg], 0.0 * altitude_angle[deg]});
+    const types::LidarScanResult* scan_ptr =
+        latest_scan_.has_value() ? &latest_scan_.value() : nullptr;
 
-    const auto voxels = ScanResultToVoxels::convert(
-        cur_state.position, cur_state.heading, scan);
+    const types::MappingStepCommand cmd = mapping_algorithm_.nextStep(cur_state, scan_ptr);
+    latest_scan_.reset();
 
-    for (const auto& v : voxels)
-        output_map_.set(v.position, v.value);
-
-    mapping_algorithm_.applyVoxelUpdates(voxels);
-
-    const types::MovementCommand cmd =
-        mapping_algorithm_.nextMove(cur_state, scan);
-
-    if (cmd.type == types::MovementCommandType::Hover) {
+    if (cmd.status == types::AlgorithmStatus::Finished ||
+        cmd.status == types::AlgorithmStatus::FinishedWithUnmappableVoxels) {
         ++step_index_;
         return {types::DroneStepStatus::Completed};
     }
 
-    types::MovementResult result{true, {}};
-    switch (cmd.type) {
-        case types::MovementCommandType::Rotate:
-            result = movement_.rotate(cmd.rotation, cmd.angle);
-            break;
-        case types::MovementCommandType::Advance:
-            result = movement_.advance(cmd.distance);
-            break;
-        case types::MovementCommandType::Elevate:
-            result = movement_.elevate(cmd.distance);
-            break;
-        default:
-            break;
+    // Execute movement first (spec: movement before scan when both provided)
+    if (cmd.movement.has_value()) {
+        const auto& mv = *cmd.movement;
+        types::MovementResult result{true, {}};
+        switch (mv.type) {
+            case types::MovementCommandType::Rotate:
+                result = movement_.rotate(mv.rotation, mv.angle);
+                break;
+            case types::MovementCommandType::Advance:
+                result = movement_.advance(mv.distance);
+                break;
+            case types::MovementCommandType::Elevate:
+                result = movement_.elevate(mv.distance);
+                break;
+            default:
+                break;
+        }
+        ++step_index_;
+        if (!result)
+            return {types::DroneStepStatus::Error, result.message};
+    } else {
+        ++step_index_;
     }
 
-    ++step_index_;
+    // Execute scan after movement
+    if (cmd.scan_orientation.has_value()) {
+        const types::DroneState post_move_state = state();
+        const types::LidarScanResult scan = lidar_.scan(*cmd.scan_orientation);
+        latest_scan_ = scan;
 
-    if (!result)
-        return {types::DroneStepStatus::Error, result.message};
+        const auto voxels = ScanResultToVoxels::convert(
+            post_move_state.position, post_move_state.heading, scan);
+        for (const auto& v : voxels)
+            output_map_.set(v.position, v.value);
+    }
 
     return {types::DroneStepStatus::Continue};
 }

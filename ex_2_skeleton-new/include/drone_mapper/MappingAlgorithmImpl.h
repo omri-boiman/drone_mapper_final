@@ -1,8 +1,6 @@
 #pragma once
 
 #include <drone_mapper/IMappingAlgorithm.h>
-#include <drone_mapper/types/DroneTypes.h>
-#include <drone_mapper/types/MapTypes.h>
 
 #include <deque>
 #include <map>
@@ -14,13 +12,9 @@ namespace drone_mapper {
 
 class MappingAlgorithmImpl final : public IMappingAlgorithm {
 public:
-    explicit MappingAlgorithmImpl(types::MissionConfigData mission,
-                                  types::DroneConfigData drone = {},
-                                  types::MappingBounds bounds = {});
-
-    [[nodiscard]] types::MovementCommand nextMove(const types::DroneState& state,
-                                                  const types::LidarScanResult& latest_scan) override;
-    void applyVoxelUpdates(const std::vector<types::MappedVoxel>& voxels) override;
+    using IMappingAlgorithm::IMappingAlgorithm;
+    [[nodiscard]] types::MappingStepCommand nextStep(const types::DroneState& state,
+                                                     const types::LidarScanResult* latest_scan) override;
 
 private:
     struct GridCell2D {
@@ -33,11 +27,7 @@ private:
 
     using Cell3D = std::pair<GridCell2D, int>;
 
-    // Config
-    types::MissionConfigData mission_;
-    types::DroneConfigData drone_;
-    types::MappingBounds bounds_;
-
+    // Populated on first nextStep() call from _drone_config and _output_map
     double nav_step_cm_    = 50.0;
     double max_rotate_deg_ = 45.0;
     double max_elevate_cm_ = 40.0;
@@ -60,8 +50,6 @@ private:
     std::vector<double> height_levels_cm_;
     std::size_t         height_level_index_ = 0;
     int pending_level_idx_ = -1;
-
-    std::vector<types::MappedVoxel> pre_init_voxels_;
 
     // Helpers
     void initialize(const types::DroneState& state);

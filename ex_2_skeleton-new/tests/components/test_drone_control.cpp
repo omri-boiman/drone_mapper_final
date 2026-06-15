@@ -42,10 +42,17 @@ public:
 
 class MockAlgorithm_DC : public IMappingAlgorithm {
 public:
-    MOCK_METHOD(types::MovementCommand, nextMove,
-                (const types::DroneState&, const types::LidarScanResult&), (override));
-    MOCK_METHOD(void, applyVoxelUpdates,
-                (const std::vector<types::MappedVoxel>&), (override));
+    struct NullMap : IMap3D {
+        types::VoxelOccupancy atVoxel(const Position3D&) const override {
+            return types::VoxelOccupancy::Empty;
+        }
+        types::MapConfig getMapConfig() const override { return {}; }
+    };
+    MockAlgorithm_DC() : IMappingAlgorithm(types::DroneConfigData{}, null_map_) {}
+    MOCK_METHOD(types::MappingStepCommand, nextStep,
+                (const types::DroneState&, const types::LidarScanResult*), (override));
+private:
+    NullMap null_map_;
 };
 
 namespace {
@@ -85,9 +92,12 @@ protected:
         ON_CALL(lidar, scan(_)).WillByDefault(Return(types::LidarScanResult{}));
         ON_CALL(map, atVoxel(_)).WillByDefault(Return(types::VoxelOccupancy::Empty));
         ON_CALL(map, getMapConfig()).WillByDefault(Return(defaultMapConfig()));
-        ON_CALL(algo, nextMove(_, _)).WillByDefault(Return(
-            types::MovementCommand{types::MovementCommandType::Hover}));
-        ON_CALL(algo, applyVoxelUpdates(_)).WillByDefault(Return());
+        ON_CALL(algo, nextStep(_, _)).WillByDefault(Return(
+            types::MappingStepCommand{
+                std::nullopt,
+                Orientation{0.0*horizontal_angle[deg], 0.0*altitude_angle[deg]},
+                types::AlgorithmStatus::Working
+            }));
         ON_CALL(movement, rotate(_, _)).WillByDefault(Return(types::MovementResult{true}));
         ON_CALL(movement, advance(_)).WillByDefault(Return(types::MovementResult{true}));
         ON_CALL(movement, elevate(_)).WillByDefault(Return(types::MovementResult{true}));
@@ -106,26 +116,30 @@ TEST_F(DroneControl, StepCallsLidarScan) {
     std::ignore = ctrl.step();
 }
 
-TEST_F(DroneControl, StepCallsApplyVoxelUpdates) {
-    EXPECT_CALL(algo, applyVoxelUpdates(_)).Times(AtLeast(1));
+TEST_F(DroneControl, StepCallsNextStep) {
+    EXPECT_CALL(algo, nextStep(_, _)).Times(AtLeast(1));
     DroneControlImpl ctrl(defaultDrone(), defaultMission(), lidar, gps, movement, map, algo);
     std::ignore = ctrl.step();
 }
 
-TEST_F(DroneControl, StepReturnsCompletedWhenAlgorithmReturnsHover) {
-    ON_CALL(algo, nextMove(_, _)).WillByDefault(Return(
-        types::MovementCommand{types::MovementCommandType::Hover}));
+TEST_F(DroneControl, StepReturnsCompletedWhenAlgorithmReturnsFinished) {
+    ON_CALL(algo, nextStep(_, _)).WillByDefault(Return(
+        types::MappingStepCommand{std::nullopt, std::nullopt, types::AlgorithmStatus::Finished}));
     DroneControlImpl ctrl(defaultDrone(), defaultMission(), lidar, gps, movement, map, algo);
     const auto result = ctrl.step();
     EXPECT_EQ(result.status, types::DroneStepStatus::Completed);
 }
 
 TEST_F(DroneControl, StepReturnsErrorOnCollision) {
-    ON_CALL(algo, nextMove(_, _)).WillByDefault(Return(
-        types::MovementCommand{types::MovementCommandType::Advance,
-                               types::RotationDirection::Left,
-                               0.0*horizontal_angle[deg],
-                               30.0*cm}));
+    ON_CALL(algo, nextStep(_, _)).WillByDefault(Return(
+        types::MappingStepCommand{
+            types::MovementCommand{types::MovementCommandType::Advance,
+                                   types::RotationDirection::Left,
+                                   0.0*horizontal_angle[deg],
+                                   30.0*cm},
+            std::nullopt,
+            types::AlgorithmStatus::Working
+        }));
     ON_CALL(movement, advance(_)).WillByDefault(
         Return(types::MovementResult{false, "DRONE_HITS_OBSTACLE"}));
 
@@ -136,11 +150,15 @@ TEST_F(DroneControl, StepReturnsErrorOnCollision) {
 }
 
 TEST_F(DroneControl, StepReturnsContinueOnSuccessfulAdvance) {
-    ON_CALL(algo, nextMove(_, _)).WillByDefault(Return(
-        types::MovementCommand{types::MovementCommandType::Advance,
-                               types::RotationDirection::Left,
-                               0.0*horizontal_angle[deg],
-                               30.0*cm}));
+    ON_CALL(algo, nextStep(_, _)).WillByDefault(Return(
+        types::MappingStepCommand{
+            types::MovementCommand{types::MovementCommandType::Advance,
+                                   types::RotationDirection::Left,
+                                   0.0*horizontal_angle[deg],
+                                   30.0*cm},
+            std::nullopt,
+            types::AlgorithmStatus::Working
+        }));
     DroneControlImpl ctrl(defaultDrone(), defaultMission(), lidar, gps, movement, map, algo);
     const auto result = ctrl.step();
     EXPECT_EQ(result.status, types::DroneStepStatus::Continue);

@@ -56,9 +56,8 @@ SimulationRunFactoryImpl::create(const types::SimulationConfigData& simulation,
     auto movement   = std::make_unique<MockMovement>(*gps, *hidden_map, drone);
     auto lidar_impl = std::make_unique<MockLidar>(lidar, *hidden_map, *gps);
 
-    // Algorithm uses bounds from the hidden map
-    auto algorithm = std::make_unique<MappingAlgorithmImpl>(
-        mission, drone, hidden_cfg.boundaries);
+    // Algorithm gets drone config and output map; derives bounds from output_map.getMapConfig()
+    auto algorithm = std::make_unique<MappingAlgorithmImpl>(drone, *output_map);
 
     // Unique output filename per (sim × mission × drone × lidar) combo
     std::filesystem::create_directories(output_path);
@@ -67,7 +66,7 @@ SimulationRunFactoryImpl::create(const types::SimulationConfigData& simulation,
         std::to_string(static_cast<int>(
             mission.gps_resolution.force_numerical_value_in(cm))) + "cm_" +
         std::to_string(static_cast<int>(
-            drone.dimensions.force_numerical_value_in(cm))) + "d_" +
+            drone.radius.force_numerical_value_in(cm))) + "r_" +
         std::to_string(static_cast<int>(
             lidar.z_max.force_numerical_value_in(cm))) + "lz.npy";
     const std::filesystem::path output_map_file = output_path / fname;

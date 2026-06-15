@@ -26,11 +26,19 @@ public:
 
 class StubAlgorithm : public IMappingAlgorithm {
 public:
-    types::MovementCommand nextMove(const types::DroneState&,
-                                    const types::LidarScanResult&) override {
-        return {types::MovementCommandType::Hover};
+    struct NullMap : IMap3D {
+        types::VoxelOccupancy atVoxel(const Position3D&) const override {
+            return types::VoxelOccupancy::Empty;
+        }
+        types::MapConfig getMapConfig() const override { return {}; }
+    };
+    StubAlgorithm() : IMappingAlgorithm(types::DroneConfigData{}, null_map_) {}
+    types::MappingStepCommand nextStep(const types::DroneState&,
+                                       const types::LidarScanResult*) override {
+        return {std::nullopt, std::nullopt, types::AlgorithmStatus::Finished};
     }
-    void applyVoxelUpdates(const std::vector<types::MappedVoxel>&) override {}
+private:
+    NullMap null_map_;
 };
 
 class StubDroneCtrl : public IDroneControl {
