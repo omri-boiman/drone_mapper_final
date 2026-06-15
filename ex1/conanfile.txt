@@ -1,0 +1,9 @@
+[requires]
+mp-units/2.5.0
+
+[layout]
+cmake_layout
+
+[generators]
+CMakeToolchain
+CMakeDeps

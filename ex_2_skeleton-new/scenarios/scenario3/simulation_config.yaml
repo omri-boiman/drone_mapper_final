@@ -1,0 +1,12 @@
+simulation_config:
+  map_filename: "data_maps/scenario3_map.npy"
+  map_resolution_cm: 1
+  initial_drone_position:
+    x_cm: 3
+    y_cm: 0
+    height_cm: 4
+  initial_angle_deg: 0
+  map_axes_offset:
+    x_offset: 0
+    y_offset: 0
+    height_offset: 0

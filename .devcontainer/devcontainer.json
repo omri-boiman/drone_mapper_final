@@ -1,0 +1,9 @@
+{
+	"name": "Drone Mapper C++",
+	"build": {
+		"dockerfile": "Dockerfile"
+	},
+	// Runs once after the container is created, as the vscode user.
+	// Creates the Conan default compiler profile so 'make' works immediately.
+	"postCreateCommand": "conan profile detect --name default --force"
+}

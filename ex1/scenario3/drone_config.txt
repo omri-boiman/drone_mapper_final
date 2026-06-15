@@ -1,0 +1,10 @@
+min_pass_width_cm        = 1
+min_pass_length_cm       = 1
+min_pass_height_cm       = 1
+lidar_beam_min_cm        = 1
+lidar_beam_max_cm        = 20
+lidar_circle_spacing_cm  = 0.5
+lidar_fov_circles        = 5
+max_rotate_deg           = 45
+max_advance_cm           = 1
+max_elevate_cm           = 1

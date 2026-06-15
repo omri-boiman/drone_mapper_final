@@ -1,0 +1,25 @@
+# Build outputs
+build/
+*/build/
+**/build/
+*.o
+*.a
+*.so
+*.ninja
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+install_manifest.txt
+
+# vcpkg installed packages
+**/vcpkg_installed/
+
+# IDE
+.vscode/
+.idea/
+
+# Generated output maps (not source data maps)
+**/output_map*.npy

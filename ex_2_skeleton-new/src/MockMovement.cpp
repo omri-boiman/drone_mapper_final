@@ -1,0 +1,111 @@
+#include <drone_mapper/MockMovement.h>
+
+#include <cmath>
+#include <numbers>
+
+namespace drone_mapper {
+
+namespace {
+
+HorizontalAngle clampAngle(HorizontalAngle value, HorizontalAngle limit) {
+    if (value >  limit) return  limit;
+    if (value < -limit) return -limit;
+    return value;
+}
+
+PhysicalLength clampDist(PhysicalLength value, PhysicalLength limit) {
+    if (value >  limit) return  limit;
+    if (value < -limit) return -limit;
+    return value;
+}
+
+HorizontalAngle wrapHeading(HorizontalAngle angle) {
+    double raw = std::fmod(angle.force_numerical_value_in(deg), 360.0);
+    if (raw < 0.0) raw += 360.0;
+    return raw * horizontal_angle[deg];
+}
+
+} // namespace
+
+MockMovement::MockMovement(MockGPS& gps,
+                           const IMap3D& hidden_map,
+                           const types::DroneConfigData& config)
+    : gps_(gps), hidden_map_(hidden_map), config_(config) {}
+
+types::MovementResult MockMovement::rotate(types::RotationDirection direction,
+                                           HorizontalAngle angle) {
+    const HorizontalAngle clamped = clampAngle(angle, config_.max_rotate);
+    const HorizontalAngle signed_delta =
+        (direction == types::RotationDirection::Left) ? -clamped : clamped;
+    const Orientation current = gps_.heading();
+    gps_.setHeading(Orientation{wrapHeading(current.horizontal + signed_delta),
+                                current.altitude});
+    return {true, {}};
+}
+
+types::MovementResult MockMovement::advance(PhysicalLength distance) {
+    const PhysicalLength dist = clampDist(distance, config_.max_advance);
+    const double distCm = dist.force_numerical_value_in(cm);
+
+    const double headingRad =
+        gps_.heading().horizontal.force_numerical_value_in(deg)
+        * std::numbers::pi / 180.0;
+
+    const double dx = distCm * std::cos(headingRad);
+    const double dy = distCm * std::sin(headingRad);
+
+    const Position3D start = gps_.position();
+    const double startX = start.x.force_numerical_value_in(cm);
+    const double startY = start.y.force_numerical_value_in(cm);
+    const double startZ = start.z.force_numerical_value_in(cm);
+
+    const int steps = static_cast<int>(std::abs(distCm)) + 1;
+    for (int i = 1; i <= steps; ++i) {
+        const double t = static_cast<double>(i) / static_cast<double>(steps);
+        const Position3D sample{
+            (startX + t * dx) * x_extent[cm],
+            (startY + t * dy) * y_extent[cm],
+            startZ             * z_extent[cm],
+        };
+        if (hidden_map_.atVoxel(sample) == types::VoxelOccupancy::Occupied)
+            return {false, "DRONE_HITS_OBSTACLE"};
+    }
+
+    gps_.setPosition(Position3D{
+        (startX + dx) * x_extent[cm],
+        (startY + dy) * y_extent[cm],
+        startZ         * z_extent[cm],
+    });
+    return {true, {}};
+}
+
+types::MovementResult MockMovement::elevate(PhysicalLength distance) {
+    const PhysicalLength dist = clampDist(distance, config_.max_elevate);
+    const double distCm = dist.force_numerical_value_in(cm);
+
+    const Position3D start = gps_.position();
+    const double startX = start.x.force_numerical_value_in(cm);
+    const double startY = start.y.force_numerical_value_in(cm);
+    const double startZ = start.z.force_numerical_value_in(cm);
+
+    const int steps = static_cast<int>(std::abs(distCm)) + 1;
+    for (int i = 1; i <= steps; ++i) {
+        const double t = static_cast<double>(i) / static_cast<double>(steps);
+        const Position3D sample{
+            startX               * x_extent[cm],
+            startY               * y_extent[cm],
+            (startZ + t * distCm) * z_extent[cm],
+        };
+        if (hidden_map_.atVoxel(sample) == types::VoxelOccupancy::Occupied)
+            return {false, "DRONE_HITS_OBSTACLE"};
+    }
+
+    gps_.setPosition(Position3D{
+        startX              * x_extent[cm],
+        startY              * y_extent[cm],
+        (startZ + distCm)   * z_extent[cm],
+    });
+    return {true, {}};
+}
+
+} // namespace drone_mapper
