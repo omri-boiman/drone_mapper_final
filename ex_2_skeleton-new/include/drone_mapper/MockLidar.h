@@ -18,6 +18,10 @@ private:
     types::LidarConfigData config_;
     const IMap3D& map_;
     const IGPS& gps_;
+    PhysicalLength step_;       // cached: 0.1 * map resolution, constant for lifetime
+    double step_cm_;            // cached as double to avoid repeated unit extraction
+    double max_dist_cm_;        // cached: config_.z_max in cm
+    double min_dist_cm_;        // cached: config_.z_min in cm
 };
 
 } // namespace drone_mapper

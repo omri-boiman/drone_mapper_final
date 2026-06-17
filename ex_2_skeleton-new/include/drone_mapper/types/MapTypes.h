@@ -2,6 +2,8 @@
 
 #include <drone_mapper/Units.h>
 
+#include <functional>
+
 namespace drone_mapper::types {
 
 enum class VoxelOccupancy {
@@ -49,3 +51,15 @@ struct GridCell3D {
 };
 
 } // namespace drone_mapper::types
+
+namespace std {
+template <>
+struct hash<drone_mapper::types::GridCell3D> {
+    std::size_t operator()(const drone_mapper::types::GridCell3D& c) const noexcept {
+        std::size_t h = std::hash<int>{}(c.x);
+        h ^= std::hash<int>{}(c.y) + 0x9e3779b9u + (h << 6) + (h >> 2);
+        h ^= std::hash<int>{}(c.z) + 0x9e3779b9u + (h << 6) + (h >> 2);
+        return h;
+    }
+};
+} // namespace std

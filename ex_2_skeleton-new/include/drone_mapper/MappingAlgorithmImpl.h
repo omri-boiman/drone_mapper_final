@@ -3,8 +3,9 @@
 #include <drone_mapper/IMappingAlgorithm.h>
 
 #include <deque>
-#include <map>
-#include <set>
+#include <functional>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -24,8 +25,22 @@ private:
             return x != o.x ? x < o.x : y < o.y;
         }
     };
+    struct GridCell2DHash {
+        std::size_t operator()(const GridCell2D& c) const noexcept {
+            return std::hash<long long>{}((static_cast<long long>(c.x) << 32) |
+                                         static_cast<unsigned int>(c.y));
+        }
+    };
 
-    using Cell3D = types::GridCell3D;
+    using Cell3D     = types::GridCell3D;
+    using Cell3DHash = std::hash<types::GridCell3D>;
+
+    struct PairHash {
+        std::size_t operator()(const std::pair<int,int>& p) const noexcept {
+            return std::hash<long long>{}((static_cast<long long>(p.first) << 32) |
+                                         static_cast<unsigned int>(p.second));
+        }
+    };
 
     // Populated on first nextStep() call from drone_config_ and output_map_
     PhysicalLength  nav_step_    = 50.0 * cm;
@@ -43,11 +58,11 @@ private:
     bool done_        = false;
     bool needs_scan_  = true;
 
-    std::set<Cell3D> visited_3d_;
-    std::set<Cell3D> frontier_3d_;
+    std::unordered_set<Cell3D, Cell3DHash> visited_3d_;
+    std::unordered_set<Cell3D, Cell3DHash> frontier_3d_;
 
-    std::map<Cell3D, bool> obstacle_cache_;
-    std::set<std::pair<int,int>> fine_wall_xy_;
+    std::unordered_map<Cell3D, bool, Cell3DHash> obstacle_cache_;
+    std::unordered_set<std::pair<int,int>, PairHash> fine_wall_xy_;
     std::deque<types::MovementCommand> pending_commands_;
 
     std::vector<double> height_levels_cm_;

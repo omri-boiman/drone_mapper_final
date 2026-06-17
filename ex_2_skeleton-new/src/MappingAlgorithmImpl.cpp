@@ -6,10 +6,10 @@
 #include <cmath>
 #include <functional>
 #include <limits>
-#include <map>
 #include <numbers>
 #include <queue>
-#include <set>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace drone_mapper {
@@ -178,9 +178,9 @@ MappingAlgorithmImpl::findPath(const GridCell2D& from, const GridCell2D& to,
 
     using Entry = std::pair<int, GridCell2D>;
     std::priority_queue<Entry, std::vector<Entry>, std::greater<>> open;
-    std::map<GridCell2D, int>        g_score;
-    std::map<GridCell2D, GridCell2D> parent;
-    std::set<GridCell2D>             closed;
+    std::unordered_map<GridCell2D, int,        GridCell2DHash> g_score;
+    std::unordered_map<GridCell2D, GridCell2D, GridCell2DHash> parent;
+    std::unordered_set<GridCell2D, GridCell2DHash>             closed;
 
     g_score[from] = 0;
     parent[from]  = from;
