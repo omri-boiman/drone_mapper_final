@@ -59,3 +59,32 @@ TEST_F(Integration, OutputMapFileIsCreated) {
     }
     EXPECT_TRUE(found_npy) << "No .npy output map found under " << out;
 }
+
+TEST_F(Integration, MultiMissionCompositionRunsAll) {
+    // 1 sim × 2 missions × 1 drone × 1 lidar = 2 runs
+    auto composition = singleVoxelComposition();
+    composition.missions.push_back(types::MissionConfigData{200, 10.0*cm, 1});
+
+    auto factory = std::make_unique<SimulationRunFactoryImpl>();
+    drone_mapper::SimulationManager manager(std::move(factory));
+
+    types::SimulationManagerReport report;
+    ASSERT_NO_THROW(report = manager.run(composition, "/tmp/integration_multi_mission"));
+    EXPECT_EQ(report.runs.size(), 2u);
+    for (const auto& run : report.runs)
+        EXPECT_NE(run.mission_results[0].status, types::MissionRunStatus::Error);
+}
+
+TEST_F(Integration, InvalidMapFileRunsErrorWithMinusOneScore) {
+    types::SimulationCompositionData bad_composition = singleVoxelComposition();
+    bad_composition.simulations[0].map_filename = "data_maps/does_not_exist.npy";
+
+    auto factory = std::make_unique<SimulationRunFactoryImpl>();
+    drone_mapper::SimulationManager manager(std::move(factory));
+
+    types::SimulationManagerReport report;
+    ASSERT_NO_THROW(report = manager.run(bad_composition, "/tmp/integration_bad_map"));
+    ASSERT_EQ(report.runs.size(), 1u);
+    EXPECT_DOUBLE_EQ(report.runs[0].mission_score, -1.0);
+    EXPECT_EQ(report.runs[0].mission_results[0].status, types::MissionRunStatus::Error);
+}

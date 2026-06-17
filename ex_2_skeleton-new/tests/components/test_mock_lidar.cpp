@@ -107,3 +107,54 @@ TEST_F(MockLidar, MissDistanceIsMaxDouble) {
     ASSERT_EQ(result.size(), 1u);
     EXPECT_TRUE(isMiss(result[0]));
 }
+
+TEST_F(MockLidar, ObstacleBeyondMaxRangeIsMiss) {
+    // Voxel at (20, 40, 20), drone at (0, 40, 20) facing east — distance is 20cm.
+    // Set z_max=10cm so the voxel is beyond range.
+    auto map = singleVoxelMap();
+    dm::MockGPS gps{
+        {0.0*dm::x_extent[dm::cm], 40.0*dm::y_extent[dm::cm], 20.0*dm::z_extent[dm::cm]},
+        {0.0*dm::horizontal_angle[dm::deg], 0.0*dm::altitude_angle[dm::deg]},
+        10.0*dm::cm};
+    dm::types::LidarConfigData lidar_cfg{5.0*dm::cm, 10.0*dm::cm, 2.5*dm::cm, 1};
+    dm::MockLidar lidar(lidar_cfg, map, gps);
+
+    const auto result = lidar.scan({0.0*dm::horizontal_angle[dm::deg], 0.0*dm::altitude_angle[dm::deg]});
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_TRUE(isMiss(result[0])) << "Voxel beyond z_max should be a miss";
+}
+
+TEST_F(MockLidar, ScanAtOppositeHeadingDetectsVoxelBehind) {
+    // Voxel at (20, 40, 20). Drone at (40, 40, 20) facing east — voxel is 20cm west.
+    // Scanning at 180° (west relative to drone) should detect the voxel.
+    // Scanning at 0° (east) should miss.
+    auto map = singleVoxelMap();
+    dm::MockGPS gps{
+        {40.0*dm::x_extent[dm::cm], 40.0*dm::y_extent[dm::cm], 20.0*dm::z_extent[dm::cm]},
+        {0.0*dm::horizontal_angle[dm::deg], 0.0*dm::altitude_angle[dm::deg]},
+        10.0*dm::cm};
+    dm::types::LidarConfigData lidar_cfg{5.0*dm::cm, 30.0*dm::cm, 2.5*dm::cm, 1};
+    dm::MockLidar lidar(lidar_cfg, map, gps);
+
+    const auto east_result = lidar.scan({0.0*dm::horizontal_angle[dm::deg], 0.0*dm::altitude_angle[dm::deg]});
+    ASSERT_EQ(east_result.size(), 1u);
+    EXPECT_TRUE(isMiss(east_result[0])) << "Scanning east should miss the voxel that's to the west";
+
+    const auto west_result = lidar.scan({180.0*dm::horizontal_angle[dm::deg], 0.0*dm::altitude_angle[dm::deg]});
+    ASSERT_EQ(west_result.size(), 1u);
+    EXPECT_FALSE(isMiss(west_result[0])) << "Scanning west should detect the voxel at 20cm";
+}
+
+TEST_F(MockLidar, FovCircles4Has85Beams) {
+    auto map = emptyMap();
+    dm::MockGPS gps{
+        {50.0*dm::x_extent[dm::cm], 50.0*dm::y_extent[dm::cm], 50.0*dm::z_extent[dm::cm]},
+        {0.0*dm::horizontal_angle[dm::deg], 0.0*dm::altitude_angle[dm::deg]},
+        10.0*dm::cm};
+    // 4 circles: 1 + 4 + 16 + 64 = 85 beams
+    dm::types::LidarConfigData lidar_cfg{5.0*dm::cm, 80.0*dm::cm, 2.5*dm::cm, 4};
+    dm::MockLidar lidar(lidar_cfg, map, gps);
+
+    const auto result = lidar.scan({0.0*dm::horizontal_angle[dm::deg], 0.0*dm::altitude_angle[dm::deg]});
+    EXPECT_EQ(result.size(), 85u);
+}

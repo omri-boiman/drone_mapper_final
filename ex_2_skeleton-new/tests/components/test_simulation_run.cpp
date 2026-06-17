@@ -76,7 +76,31 @@ std::unique_ptr<IMutableMap3D> outputMap() {
 
 } // namespace
 
-class SimulationRun : public ::testing::Test {};
+class SimulationRun : public ::testing::Test {
+protected:
+    std::unique_ptr<SimulationRunImpl> makeRun(
+        std::unique_ptr<IMissionControl> mc,
+        types::ResolutionRequestStatus res_status = types::ResolutionRequestStatus::Accepted)
+    {
+        auto gps_ptr = std::make_unique<MockGPS>(
+            Position3D{50.0*x_extent[cm], 50.0*y_extent[cm], 50.0*z_extent[cm]},
+            Orientation{0.0*horizontal_angle[deg], 0.0*altitude_angle[deg]},
+            10.0*cm);
+        types::DroneConfigData drone_cfg{30.0*cm, 45.0*horizontal_angle[deg], 50.0*cm, 40.0*cm};
+        auto hm = hiddenMap();
+        auto movement_ptr = std::make_unique<MockMovement>(*gps_ptr, *hm, drone_cfg);
+        return std::make_unique<SimulationRunImpl>(
+            std::move(hm), outputMap(),
+            std::move(gps_ptr), std::move(movement_ptr),
+            std::make_unique<StubLidar>(),
+            std::make_unique<StubAlgorithm>(),
+            std::make_unique<StubDroneCtrl>(),
+            std::move(mc),
+            defaultSimCfg(), defaultMissionCfg(),
+            "/tmp/test_run.npy",
+            res_status);
+    }
+};
 
 TEST_F(SimulationRun, RunDelegatesToMissionControl) {
     auto mock_mc = std::make_unique<MockMissionCtrl>();
@@ -84,35 +108,48 @@ TEST_F(SimulationRun, RunDelegatesToMissionControl) {
         types::MissionRunStatus::Completed, 42, {}};
     EXPECT_CALL(*mock_mc, runMission()).Times(1).WillOnce(Return(mission_res));
 
-    auto gps_ptr = std::make_unique<MockGPS>(
-        Position3D{50.0*x_extent[cm], 50.0*y_extent[cm], 50.0*z_extent[cm]},
-        Orientation{0.0*horizontal_angle[deg], 0.0*altitude_angle[deg]},
-        10.0*cm);
-
-    types::DroneConfigData drone_cfg{30.0*cm, 45.0*horizontal_angle[deg], 50.0*cm, 40.0*cm};
-    auto hm = hiddenMap();
-    auto movement_ptr = std::make_unique<MockMovement>(*gps_ptr, *hm, drone_cfg);
-
-    SimulationRunImpl run(
-        std::move(hm), outputMap(),
-        std::move(gps_ptr), std::move(movement_ptr),
-        std::make_unique<StubLidar>(),
-        std::make_unique<StubAlgorithm>(),
-        std::make_unique<StubDroneCtrl>(),
-        std::move(mock_mc),
-        defaultSimCfg(), defaultMissionCfg(),
-        "/tmp/test_run.npy",
-        types::ResolutionRequestStatus::Accepted);
-
-    const auto result = run.run();
+    const auto result = makeRun(std::move(mock_mc))->run();
     ASSERT_FALSE(result.mission_results.empty());
     EXPECT_EQ(result.mission_results[0].steps, 42u);
     EXPECT_GE(result.mission_score, 0.0);
 }
 
-// ── MockGPS tests ─────────────────────────────────────────────────────────────
+TEST_F(SimulationRun, ErrorStatusSetsScoreMinusOne) {
+    auto mock_mc = std::make_unique<MockMissionCtrl>();
+    EXPECT_CALL(*mock_mc, runMission()).WillOnce(Return(
+        types::MissionRunResult{types::MissionRunStatus::Error, 5, {}}));
 
-TEST(MockGPSTest, SetPositionReflectedByPosition) {
+    const auto result = makeRun(std::move(mock_mc))->run();
+    EXPECT_DOUBLE_EQ(result.mission_score, -1.0);
+}
+
+TEST_F(SimulationRun, MaxStepsStatusStillScored) {
+    auto mock_mc = std::make_unique<MockMissionCtrl>();
+    EXPECT_CALL(*mock_mc, runMission()).WillOnce(Return(
+        types::MissionRunResult{types::MissionRunStatus::MaxSteps, 100, {}}));
+
+    const auto result = makeRun(std::move(mock_mc))->run();
+    EXPECT_GE(result.mission_score, 0.0);
+}
+
+TEST_F(SimulationRun, NullMissionControlThrows) {
+    EXPECT_THROW(makeRun(nullptr), std::invalid_argument);
+}
+
+TEST_F(SimulationRun, ResolutionStatusPropagatedToResult) {
+    auto mock_mc = std::make_unique<MockMissionCtrl>();
+    EXPECT_CALL(*mock_mc, runMission()).WillOnce(Return(
+        types::MissionRunResult{types::MissionRunStatus::Completed, 1, {}}));
+
+    const auto result = makeRun(std::move(mock_mc),
+                                types::ResolutionRequestStatus::IgnoredTooSmall)->run();
+    EXPECT_EQ(result.resolution_request_status,
+              types::ResolutionRequestStatus::IgnoredTooSmall);
+}
+
+// ── MockGPS tests (under SimulationRun filter per assignment requirement) ─────
+
+TEST_F(SimulationRun, GPS_SetPositionReflectedByPosition) {
     MockGPS gps{{10.0*x_extent[cm], 20.0*y_extent[cm], 30.0*z_extent[cm]},
                 {0.0*horizontal_angle[deg], 0.0*altitude_angle[deg]}, 10.0*cm};
 
@@ -122,16 +159,16 @@ TEST(MockGPSTest, SetPositionReflectedByPosition) {
     EXPECT_DOUBLE_EQ(gps.position().z.force_numerical_value_in(cm), 77.0);
 }
 
-TEST(MockGPSTest, SetHeadingReflectedByHeading) {
+TEST_F(SimulationRun, GPS_SetHeadingReflectedByHeading) {
     MockGPS gps{Position3D{}, {0.0*horizontal_angle[deg], 0.0*altitude_angle[deg]}, 10.0*cm};
     gps.setHeading({90.0*horizontal_angle[deg], 15.0*altitude_angle[deg]});
     EXPECT_DOUBLE_EQ(gps.heading().horizontal.force_numerical_value_in(deg), 90.0);
     EXPECT_DOUBLE_EQ(gps.heading().altitude.force_numerical_value_in(deg), 15.0);
 }
 
-// ── MockMovement tests ────────────────────────────────────────────────────────
+// ── MockMovement tests (under SimulationRun filter per assignment requirement)
 
-TEST(MockMovementTest, AdvanceSucceedsOnEmptyPath) {
+TEST_F(SimulationRun, Movement_AdvanceSucceedsOnEmptyPath) {
     types::MappingBounds b{
         0.0*x_extent[cm], 500.0*x_extent[cm],
         0.0*y_extent[cm], 500.0*y_extent[cm],
@@ -147,7 +184,7 @@ TEST(MockMovementTest, AdvanceSucceedsOnEmptyPath) {
     EXPECT_TRUE(result.success);
 }
 
-TEST(MockMovementTest, AdvanceFailsWhenObstacleInPath) {
+TEST_F(SimulationRun, Movement_AdvanceFailsWhenObstacleInPath) {
     Map3DImpl obstacle_map("data_maps/single_voxel_x2_y4_z2.npy", 10.0*cm);
     types::DroneConfigData drone_cfg{30.0*cm, 45.0*horizontal_angle[deg], 50.0*cm, 40.0*cm};
     MockGPS gps{{0.0*x_extent[cm], 40.0*y_extent[cm], 20.0*z_extent[cm]},
@@ -159,7 +196,7 @@ TEST(MockMovementTest, AdvanceFailsWhenObstacleInPath) {
     EXPECT_EQ(result.message, "DRONE_HITS_OBSTACLE");
 }
 
-TEST(MockMovementTest, RotateUpdatesHeading) {
+TEST_F(SimulationRun, Movement_RotateUpdatesHeading) {
     types::MappingBounds b{
         0.0*x_extent[cm], 500.0*x_extent[cm],
         0.0*y_extent[cm], 500.0*y_extent[cm],
