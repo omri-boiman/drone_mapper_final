@@ -34,4 +34,18 @@ struct MapConfig {
     Position3D offset{};
     PhysicalLength resolution{};
 };
+struct ComparisonMapConfig {
+    MapConfig map_config{};
+};
+
+struct GridCell3D {
+    int x = 0, y = 0, z = 0;
+    bool operator==(const GridCell3D& o) const noexcept = default;
+    bool operator<(const GridCell3D& o) const noexcept {
+        if (x != o.x) return x < o.x;
+        if (y != o.y) return y < o.y;
+        return z < o.z;
+    }
+};
+
 } // namespace drone_mapper::types

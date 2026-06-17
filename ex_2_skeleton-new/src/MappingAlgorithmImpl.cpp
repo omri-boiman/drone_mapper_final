@@ -14,26 +14,35 @@
 
 namespace drone_mapper {
 
+namespace {
+constexpr double toCm(PhysicalLength l)  { return l.force_numerical_value_in(cm); }
+constexpr double toXcm(XLength l)        { return l.force_numerical_value_in(cm); }
+constexpr double toYcm(YLength l)        { return l.force_numerical_value_in(cm); }
+constexpr double toZcm(ZLength l)        { return l.force_numerical_value_in(cm); }
+constexpr double toDeg(HorizontalAngle a){ return a.force_numerical_value_in(deg); }
+} // namespace
+
 void MappingAlgorithmImpl::initialize(const types::DroneState& state) {
-    nav_step_cm_    = drone_config_.max_advance.force_numerical_value_in(cm);
-    max_rotate_deg_ = drone_config_.max_rotate.force_numerical_value_in(deg);
-    max_elevate_cm_ = drone_config_.max_elevate.force_numerical_value_in(cm);
+    nav_step_    = drone_config_.max_advance;
+    max_rotate_  = drone_config_.max_rotate;
+    max_elevate_ = drone_config_.max_elevate;
 
     const auto map_cfg = output_map_.getMapConfig();
-    min_x_cm_      = map_cfg.boundaries.min_x.force_numerical_value_in(cm);
-    max_x_cm_      = map_cfg.boundaries.max_x.force_numerical_value_in(cm);
-    min_y_cm_      = map_cfg.boundaries.min_y.force_numerical_value_in(cm);
-    max_y_cm_      = map_cfg.boundaries.max_y.force_numerical_value_in(cm);
-    min_height_cm_ = map_cfg.boundaries.min_height.force_numerical_value_in(cm);
-    max_height_cm_ = map_cfg.boundaries.max_height.force_numerical_value_in(cm);
+    min_x_      = map_cfg.boundaries.min_x;
+    max_x_      = map_cfg.boundaries.max_x;
+    min_y_      = map_cfg.boundaries.min_y;
+    max_y_      = map_cfg.boundaries.max_y;
+    min_height_ = map_cfg.boundaries.min_height;
+    max_height_ = map_cfg.boundaries.max_height;
 
-    const double start_z = state.position.z.force_numerical_value_in(cm);
-    const double min_flyable = min_height_cm_ + max_elevate_cm_;
-    const double max_flyable = max_height_cm_ - max_elevate_cm_;
+    const double start_z     = state.position.z.force_numerical_value_in(cm);
+    const double max_elev_cm = toCm(max_elevate_);
+    const double min_flyable = toZcm(min_height_) + max_elev_cm;
+    const double max_flyable = toZcm(max_height_) - max_elev_cm;
 
-    for (double h = start_z; h >= min_flyable - 0.5; h -= max_elevate_cm_)
+    for (double h = start_z; h >= min_flyable - 0.5; h -= max_elev_cm)
         height_levels_cm_.push_back(h);
-    for (double h = start_z + max_elevate_cm_; h <= max_flyable + 0.5; h += max_elevate_cm_)
+    for (double h = start_z + max_elev_cm; h <= max_flyable + 0.5; h += max_elev_cm)
         height_levels_cm_.push_back(h);
 
     if (height_levels_cm_.empty())
@@ -47,7 +56,7 @@ void MappingAlgorithmImpl::initialize(const types::DroneState& state) {
 
 MappingAlgorithmImpl::GridCell2D
 MappingAlgorithmImpl::worldToGrid(const Position3D& pos) const {
-    const double step = (nav_step_cm_ > 0.0) ? nav_step_cm_ : 1.0;
+    const double step = toCm(nav_step_) > 0.0 ? toCm(nav_step_) : 1.0;
     return {
         static_cast<int>(std::floor(pos.x.force_numerical_value_in(cm) / step)),
         static_cast<int>(std::floor(pos.y.force_numerical_value_in(cm) / step)),
@@ -56,23 +65,25 @@ MappingAlgorithmImpl::worldToGrid(const Position3D& pos) const {
 
 Position3D MappingAlgorithmImpl::gridToWorld(const GridCell2D& cell,
                                               double height_cm) const {
+    const double step_cm = toCm(nav_step_);
     return {
-        cell.x * nav_step_cm_ * x_extent[cm],
-        cell.y * nav_step_cm_ * y_extent[cm],
-        height_cm              * z_extent[cm],
+        cell.x * step_cm * x_extent[cm],
+        cell.y * step_cm * y_extent[cm],
+        height_cm         * z_extent[cm],
     };
 }
 
 bool MappingAlgorithmImpl::isInBounds(const GridCell2D& cell) const {
-    const double wx = cell.x * nav_step_cm_;
-    const double wy = cell.y * nav_step_cm_;
-    return wx >= min_x_cm_ && wx <= max_x_cm_
-        && wy >= min_y_cm_ && wy <= max_y_cm_;
+    const double step_cm = toCm(nav_step_);
+    const double wx = cell.x * step_cm;
+    const double wy = cell.y * step_cm;
+    return wx >= toXcm(min_x_) && wx <= toXcm(max_x_)
+        && wy >= toYcm(min_y_) && wy <= toYcm(max_y_);
 }
 
 bool MappingAlgorithmImpl::isWalkable(const GridCell2D& cell, int level_idx) const {
     if (!isInBounds(cell)) return false;
-    const auto key = std::make_pair(cell, level_idx);
+    const Cell3D key{cell.x, cell.y, level_idx};
     const auto it = obstacle_cache_.find(key);
     if (it != obstacle_cache_.end()) return !it->second;
     return true;
@@ -87,7 +98,7 @@ void MappingAlgorithmImpl::expandFrontier(const GridCell2D& cell,
         {cell.x,     cell.y - 1},
     }};
     for (const auto& nb : neighbors) {
-        const Cell3D c3d{nb, level_idx};
+        const Cell3D c3d{nb.x, nb.y, level_idx};
         if (!visited_3d_.count(c3d) && !frontier_3d_.count(c3d)
             && isWalkable(nb, level_idx)
             && hasClearance(cell, nb, level_idx, height_cm))
@@ -97,9 +108,9 @@ void MappingAlgorithmImpl::expandFrontier(const GridCell2D& cell,
     for (int delta : {-1, +1}) {
         const int lvl = level_idx + delta;
         if (lvl < 0 || lvl >= static_cast<int>(height_levels_cm_.size())) continue;
-        const auto key = std::make_pair(cell, lvl);
+        const Cell3D key{cell.x, cell.y, lvl};
         if (obstacle_cache_.count(key) && obstacle_cache_.at(key)) continue;
-        const Cell3D c3d{cell, lvl};
+        const Cell3D c3d{cell.x, cell.y, lvl};
         if (!visited_3d_.count(c3d) && !frontier_3d_.count(c3d))
             frontier_3d_.insert(c3d);
     }
@@ -108,13 +119,13 @@ void MappingAlgorithmImpl::expandFrontier(const GridCell2D& cell,
 MappingAlgorithmImpl::Cell3D
 MappingAlgorithmImpl::findNearest3DFrontier(const GridCell2D& from,
                                               int from_level) const {
-    Cell3D best{{std::numeric_limits<int>::min(), 0}, 0};
+    Cell3D best{std::numeric_limits<int>::min(), 0, 0};
     int best_dist = std::numeric_limits<int>::max();
 
     for (const auto& c3d : frontier_3d_) {
-        const int d = std::abs(c3d.first.x - from.x)
-                    + std::abs(c3d.first.y - from.y)
-                    + std::abs(c3d.second  - from_level);
+        const int d = std::abs(c3d.x - from.x)
+                    + std::abs(c3d.y - from.y)
+                    + std::abs(c3d.z - from_level);
         if (d < best_dist) { best_dist = d; best = c3d; }
     }
     return best;
@@ -122,11 +133,10 @@ MappingAlgorithmImpl::findNearest3DFrontier(const GridCell2D& from,
 
 bool MappingAlgorithmImpl::hasClearance(const GridCell2D& from, const GridCell2D& to,
                                          int level_idx, double height_cm) const {
-    // radius is the actual sphere radius now (not half of dimensions)
-    const double radius_cm = drone_config_.radius.force_numerical_value_in(cm);
-
-    const double tx = to.x * nav_step_cm_;
-    const double ty = to.y * nav_step_cm_;
+    const double radius_cm = toCm(drone_config_.radius);
+    const double step_cm   = toCm(nav_step_);
+    const double tx = to.x * step_cm;
+    const double ty = to.y * step_cm;
 
     auto wall_at_xy = [&](double wx, double wy) -> bool {
         const int ix = static_cast<int>(std::round(wx));
@@ -139,7 +149,7 @@ bool MappingAlgorithmImpl::hasClearance(const GridCell2D& from, const GridCell2D
     auto occupied = [&](double wx, double wy, double wz) {
         const Position3D pos{wx * x_extent[cm], wy * y_extent[cm], wz * z_extent[cm]};
         const GridCell2D cell = worldToGrid(pos);
-        const auto key = std::make_pair(cell, level_idx);
+        const Cell3D key{cell.x, cell.y, level_idx};
         const auto it = obstacle_cache_.find(key);
         return it != obstacle_cache_.end() && it->second;
     };
@@ -216,8 +226,9 @@ void MappingAlgorithmImpl::enqueueRotateToAngle(double target_deg, double& curre
                                    : types::RotationDirection::Left;
     double remaining = std::abs(diff);
 
+    const double max_rot_deg = toDeg(max_rotate_);
     while (remaining > 0.5) {
-        const double step = std::min(remaining, max_rotate_deg_);
+        const double step = std::min(remaining, max_rot_deg);
         pending_commands_.push_back({
             types::MovementCommandType::Rotate, dir,
             step * horizontal_angle[deg], 0.0 * cm,
@@ -241,8 +252,9 @@ void MappingAlgorithmImpl::enqueueNavigationTo(const GridCell2D& from,
         const GridCell2D& prev = path[i - 1];
         const GridCell2D& next = path[i];
 
-        const double dx = static_cast<double>(next.x - prev.x) * nav_step_cm_;
-        const double dy = static_cast<double>(next.y - prev.y) * nav_step_cm_;
+        const double step_cm = toCm(nav_step_);
+        const double dx = static_cast<double>(next.x - prev.x) * step_cm;
+        const double dy = static_cast<double>(next.y - prev.y) * step_cm;
         double desired = std::atan2(dy, dx) * 180.0 / std::numbers::pi;
         if (desired < 0.0) desired += 360.0;
 
@@ -250,7 +262,7 @@ void MappingAlgorithmImpl::enqueueNavigationTo(const GridCell2D& from,
 
         double dist = std::sqrt(dx * dx + dy * dy);
         while (dist > 0.1) {
-            const double step = std::min(dist, nav_step_cm_);
+            const double step = std::min(dist, step_cm);
             pending_commands_.push_back({
                 types::MovementCommandType::Advance,
                 types::RotationDirection::Left,
@@ -276,9 +288,9 @@ void MappingAlgorithmImpl::applyFiltered(const std::vector<types::MappedVoxel>& 
 
         for (int lvl = 0; lvl < static_cast<int>(height_levels_cm_.size()); ++lvl) {
             const double level_z = height_levels_cm_[lvl];
-            if (std::abs(vz - level_z) <= max_elevate_cm_ + 0.5) {
-                obstacle_cache_[{cell, lvl}] = true;
-                frontier_3d_.erase({cell, lvl});
+            if (std::abs(vz - level_z) <= toCm(max_elevate_) + 0.5) {
+                obstacle_cache_[{cell.x, cell.y, lvl}] = true;
+                frontier_3d_.erase({cell.x, cell.y, lvl});
             }
         }
     }
@@ -339,10 +351,10 @@ types::MappingStepCommand MappingAlgorithmImpl::nextStep(
         const double cur_height = height_levels_cm_[cur_level];
 
         needs_scan_ = false;
-        visited_3d_.insert({cur_cell, cur_level});
+        visited_3d_.insert({cur_cell.x, cur_cell.y, cur_level});
         expandFrontier(cur_cell, cur_level, cur_height);
 
-        const double rot_step = std::min(11.25, max_rotate_deg_);
+        const double rot_step = std::min(11.25, toDeg(max_rotate_));
         const int    n_steps  = static_cast<int>(std::ceil(360.0 / rot_step));
         for (int i = 0; i < n_steps; ++i) {
             pending_commands_.push_back({
@@ -365,25 +377,27 @@ types::MappingStepCommand MappingAlgorithmImpl::nextStep(
 
     const Cell3D target = findNearest3DFrontier(cur_cell, cur_level);
 
-    if (target.first.x == std::numeric_limits<int>::min()) {
+    if (target.x == std::numeric_limits<int>::min()) {
         done_ = true;
         return {std::nullopt, std::nullopt, types::AlgorithmStatus::Finished};
     }
 
     frontier_3d_.erase(target);
     visited_3d_.insert(target);  // prevent re-adding if drone stalls at current cell
-    const auto [target_cell, target_level] = target;
+    const GridCell2D target_cell{target.x, target.y};
+    const int        target_level = target.z;
 
     double sim_heading = state.heading.horizontal.force_numerical_value_in(deg);
     enqueueNavigationTo(cur_cell, target_cell, cur_level, cur_height, sim_heading);
 
     if (target_level != cur_level) {
-        const double target_h = height_levels_cm_[target_level];
+        const double target_h    = height_levels_cm_[target_level];
+        const double max_elev_cm = toCm(max_elevate_);
         double diff = target_h - cur_height;
         while (std::abs(diff) > 0.1) {
             const double step = (diff > 0.0)
-                ? std::min( diff,  max_elevate_cm_)
-                : std::max( diff, -max_elevate_cm_);
+                ? std::min( diff,  max_elev_cm)
+                : std::max( diff, -max_elev_cm);
             pending_commands_.push_back({
                 types::MovementCommandType::Elevate,
                 types::RotationDirection::Left,

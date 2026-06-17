@@ -147,19 +147,19 @@ YamlConfigParser::parseCompositionWithPaths(const std::filesystem::path& path) {
     return result;
 }
 
-std::pair<ComparisonMapConfig, ComparisonMapConfig>
+std::pair<types::ComparisonMapConfig, types::ComparisonMapConfig>
 YamlConfigParser::parseComparisonConfig(const std::filesystem::path& path) {
     const YAML::Node doc = YAML::LoadFile(path.string());
     const YAML::Node cc  = doc["comparison_config"];
 
-    auto parseOne = [](const YAML::Node& n) -> ComparisonMapConfig {
+    auto parseOne = [](const YAML::Node& n) -> types::ComparisonMapConfig {
         types::MapConfig cfg;
         cfg.resolution = nodeDouble(n["map_res_cm"], 10.0) * cm;
         cfg.offset     = readOffset(n["map_offset"]);
         if (n["map_boundaries"]) {
             cfg.boundaries = readBounds(n["map_boundaries"]);
         }
-        return ComparisonMapConfig{cfg};
+        return types::ComparisonMapConfig{cfg};
     };
 
     return {parseOne(cc["original"]), parseOne(cc["target"])};

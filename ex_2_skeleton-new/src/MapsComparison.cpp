@@ -3,13 +3,12 @@
 #include <algorithm>
 #include <cmath>
 #include <set>
-#include <tuple>
 
 namespace drone_mapper {
 
 namespace {
 
-using Key = std::tuple<int, int, int>;
+using Key = types::GridCell3D;
 
 Key posToKey(double x, double y, double z, double step) {
     return {

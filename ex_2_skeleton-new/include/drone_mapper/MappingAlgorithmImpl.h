@@ -25,15 +25,18 @@ private:
         }
     };
 
-    using Cell3D = std::pair<GridCell2D, int>;
+    using Cell3D = types::GridCell3D;
 
     // Populated on first nextStep() call from drone_config_ and output_map_
-    double nav_step_cm_    = 50.0;
-    double max_rotate_deg_ = 45.0;
-    double max_elevate_cm_ = 40.0;
-    double min_x_cm_ = 0.0, max_x_cm_ = 500.0;
-    double min_y_cm_ = 0.0, max_y_cm_ = 500.0;
-    double min_height_cm_ = 0.0, max_height_cm_ = 300.0;
+    PhysicalLength  nav_step_    = 50.0 * cm;
+    HorizontalAngle max_rotate_  = 45.0 * horizontal_angle[deg];
+    PhysicalLength  max_elevate_ = 40.0 * cm;
+    XLength min_x_ = 0.0 * x_extent[cm];
+    XLength max_x_ = 500.0 * x_extent[cm];
+    YLength min_y_ = 0.0 * y_extent[cm];
+    YLength max_y_ = 500.0 * y_extent[cm];
+    ZLength min_height_ = 0.0 * z_extent[cm];
+    ZLength max_height_ = 300.0 * z_extent[cm];
 
     // Algorithm state
     bool initialized_ = false;
@@ -43,7 +46,7 @@ private:
     std::set<Cell3D> visited_3d_;
     std::set<Cell3D> frontier_3d_;
 
-    std::map<std::pair<GridCell2D, int>, bool> obstacle_cache_;
+    std::map<Cell3D, bool> obstacle_cache_;
     std::set<std::pair<int,int>> fine_wall_xy_;
     std::deque<types::MovementCommand> pending_commands_;
 

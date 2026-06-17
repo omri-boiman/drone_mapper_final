@@ -8,11 +8,6 @@
 
 namespace drone_mapper {
 
-// Config for maps_comparison when loaded from a comparison_config YAML
-struct ComparisonMapConfig {
-    types::MapConfig map_config{};
-};
-
 class YamlConfigParser {
 public:
     // Internal struct carrying the skeleton composition data plus parallel file paths
@@ -34,7 +29,7 @@ public:
     static types::LidarConfigData      parseLidar(const std::filesystem::path& path);
 
     // Parse comparison_config YAML; returns {origin, target} MapConfig pair
-    static std::pair<ComparisonMapConfig, ComparisonMapConfig>
+    static std::pair<types::ComparisonMapConfig, types::ComparisonMapConfig>
     parseComparisonConfig(const std::filesystem::path& path);
 };
 

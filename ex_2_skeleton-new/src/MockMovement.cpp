@@ -7,6 +7,10 @@ namespace drone_mapper {
 
 namespace {
 
+constexpr double toCm(PhysicalLength l)  { return l.force_numerical_value_in(cm); }
+constexpr double toDeg(HorizontalAngle a){ return a.force_numerical_value_in(deg); }
+constexpr double toRad(HorizontalAngle a){ return toDeg(a) * std::numbers::pi / 180.0; }
+
 HorizontalAngle clampAngle(HorizontalAngle value, HorizontalAngle limit) {
     if (value >  limit) return  limit;
     if (value < -limit) return -limit;
@@ -20,7 +24,7 @@ PhysicalLength clampDist(PhysicalLength value, PhysicalLength limit) {
 }
 
 HorizontalAngle wrapHeading(HorizontalAngle angle) {
-    double raw = std::fmod(angle.force_numerical_value_in(deg), 360.0);
+    double raw = std::fmod(toDeg(angle), 360.0);
     if (raw < 0.0) raw += 360.0;
     return raw * horizontal_angle[deg];
 }
@@ -45,19 +49,15 @@ types::MovementResult MockMovement::rotate(types::RotationDirection direction,
 
 types::MovementResult MockMovement::advance(PhysicalLength distance) {
     const PhysicalLength dist = clampDist(distance, config_.max_advance);
-    const double distCm = dist.force_numerical_value_in(cm);
-
-    const double headingRad =
-        gps_.heading().horizontal.force_numerical_value_in(deg)
-        * std::numbers::pi / 180.0;
-
+    const double distCm     = toCm(dist);
+    const double headingRad = toRad(gps_.heading().horizontal);
     const double dx = distCm * std::cos(headingRad);
     const double dy = distCm * std::sin(headingRad);
 
     const Position3D start = gps_.position();
-    const double startX = start.x.force_numerical_value_in(cm);
-    const double startY = start.y.force_numerical_value_in(cm);
-    const double startZ = start.z.force_numerical_value_in(cm);
+    const double startX = toCm(start.x);
+    const double startY = toCm(start.y);
+    const double startZ = toCm(start.z);
 
     const int steps = static_cast<int>(std::abs(distCm)) + 1;
     for (int i = 1; i <= steps; ++i) {
@@ -81,12 +81,12 @@ types::MovementResult MockMovement::advance(PhysicalLength distance) {
 
 types::MovementResult MockMovement::elevate(PhysicalLength distance) {
     const PhysicalLength dist = clampDist(distance, config_.max_elevate);
-    const double distCm = dist.force_numerical_value_in(cm);
+    const double distCm = toCm(dist);
 
     const Position3D start = gps_.position();
-    const double startX = start.x.force_numerical_value_in(cm);
-    const double startY = start.y.force_numerical_value_in(cm);
-    const double startZ = start.z.force_numerical_value_in(cm);
+    const double startX = toCm(start.x);
+    const double startY = toCm(start.y);
+    const double startZ = toCm(start.z);
 
     const int steps = static_cast<int>(std::abs(distCm)) + 1;
     for (int i = 1; i <= steps; ++i) {
