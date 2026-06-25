@@ -1,0 +1,6 @@
+# Small drone: 1cm diameter, fits through 2x2 second-floor room entrance
+drone_config:
+  dimensions_cm: 1
+  max_rotate_deg: 45
+  max_advance_cm: 1
+  max_elevate_cm: 1

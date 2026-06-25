@@ -1,0 +1,13 @@
+simulation_config:
+  map_filename: "data_maps/benchmark_map.npy"
+  map_resolution_cm: 1
+  # Drone starts outside main entrance (4x4 at x=21..24, y=25) in the 4-voxel gap (y=26..29)
+  initial_drone_position:
+    x_cm: 22
+    y_cm: 27
+    height_cm: 17
+  initial_angle_deg: 270
+  map_axes_offset:
+    x_offset: 0
+    y_offset: 0
+    height_offset: 0

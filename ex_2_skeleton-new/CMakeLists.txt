@@ -63,6 +63,7 @@ add_executable(drone_mapper_simulation_test
     tests/components/test_maps_comparison.cpp
     tests/integration/test_integration_real.cpp
     tests/integration/test_integration_mock_algo.cpp
+    tests/integration/test_integration_benchmark.cpp
 )
 target_link_libraries(drone_mapper_simulation_test PRIVATE drone_mapper GTest::gtest GTest::gtest_main GTest::gmock)
 include(GoogleTest)

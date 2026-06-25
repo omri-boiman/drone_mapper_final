@@ -1,0 +1,6 @@
+# Medium drone: 2cm diameter, fits through 3x3 second-floor room entrance
+drone_config:
+  dimensions_cm: 2
+  max_rotate_deg: 45
+  max_advance_cm: 2
+  max_elevate_cm: 2
