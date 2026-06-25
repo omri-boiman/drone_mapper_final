@@ -23,6 +23,7 @@ public:
 class MockLidar_DC : public ILidar {
 public:
     MOCK_METHOD(types::LidarScanResult, scan, (Orientation), (const, override));
+    MOCK_METHOD(types::LidarConfigData, config, (), (const, override));
 };
 
 class MockMovement_DC : public IDroneMovement {

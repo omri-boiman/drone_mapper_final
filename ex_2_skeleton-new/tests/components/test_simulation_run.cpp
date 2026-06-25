@@ -22,6 +22,7 @@ public:
 class StubLidar : public ILidar {
 public:
     types::LidarScanResult scan(Orientation) const override { return {}; }
+    types::LidarConfigData config() const override { return {}; }
 };
 
 class StubAlgorithm : public IMappingAlgorithm {

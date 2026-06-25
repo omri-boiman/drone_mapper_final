@@ -64,32 +64,38 @@ void ScoreReportWriter::write(const types::SimulationManagerReport& report,
     const double max_score = scored_scores.empty() ? 0.0
         : *std::max_element(scored_scores.begin(), scored_scores.end());
 
-    // Recover per-run paths using the deterministic iteration order:
-    // SimulationManager iterates: for each sim, for each mission, for each drone, for each lidar
-    const std::size_t n_s = paths.sim_paths.size();
-    const std::size_t n_m = paths.mission_paths.size();
+    // Build flat per-run path lookup matching SimulationManager's iteration order:
+    // for each (sim, missions) group, for each mission, for each drone, for each lidar.
     const std::size_t n_d = paths.drone_paths.size();
     const std::size_t n_l = paths.lidar_paths.size();
+    std::vector<std::string> run_sim_paths, run_mission_paths, run_drone_paths, run_lidar_paths;
+    for (std::size_t si = 0; si < paths.sim_paths.size(); ++si) {
+        const auto& missions = std::get<1>(paths.data.simulation_mission_groups[si]);
+        const auto& mpaths   = si < paths.mission_paths_per_sim.size()
+                                    ? paths.mission_paths_per_sim[si]
+                                    : std::vector<std::filesystem::path>{};
+        for (std::size_t mi = 0; mi < missions.size(); ++mi) {
+            const std::string mp = mi < mpaths.size() ? mpaths[mi].string() : "";
+            for (std::size_t di = 0; di < n_d; ++di) {
+                for (std::size_t li = 0; li < n_l; ++li) {
+                    run_sim_paths.push_back(paths.sim_paths[si].string());
+                    run_mission_paths.push_back(mp);
+                    run_drone_paths.push_back(paths.drone_paths[di].string());
+                    run_lidar_paths.push_back(paths.lidar_paths[li].string());
+                }
+            }
+        }
+    }
 
     auto simPathFor = [&](std::size_t idx) -> std::string {
-        if (n_m == 0 || n_d == 0 || n_l == 0) return "";
-        const std::size_t si = idx / (n_m * n_d * n_l);
-        return si < n_s ? paths.sim_paths[si].string() : "";
+        return idx < run_sim_paths.size() ? run_sim_paths[idx] : "";
     };
     auto missionPathFor = [&](std::size_t idx) -> std::string {
-        if (n_d == 0 || n_l == 0) return "";
-        const std::size_t mi = (idx / (n_d * n_l)) % n_m;
-        return mi < n_m ? paths.mission_paths[mi].string() : "";
+        return idx < run_mission_paths.size() ? run_mission_paths[idx] : "";
     };
     auto dronePathFor = [&](std::size_t idx) -> std::string {
-        if (n_l == 0) return "";
-        const std::size_t di = (idx / n_l) % n_d;
-        return di < n_d ? paths.drone_paths[di].string() : "";
+        return idx < run_drone_paths.size() ? run_drone_paths[idx] : "";
     };
-    auto lidarPathFor = [&](std::size_t idx) -> std::size_t {
-        return idx % n_l;
-    };
-
     // Build YAML
     YAML::Node root;
     YAML::Node score_report;
@@ -163,8 +169,7 @@ void ScoreReportWriter::write(const types::SimulationManagerReport& report,
         // Per-run entry
         YAML::Node run_node;
         run_node["drone_config"] = dronePathFor(i);
-        const std::size_t li = lidarPathFor(i);
-        run_node["lidar_config"] = li < n_l ? paths.lidar_paths[li].string() : "";
+        run_node["lidar_config"] = i < run_lidar_paths.size() ? run_lidar_paths[i] : "";
 
         const auto& mr = run.mission_results.empty()
             ? types::MissionRunResult{}

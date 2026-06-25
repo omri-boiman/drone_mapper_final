@@ -41,8 +41,8 @@ types::SimulationManagerReport SimulationManager::run(
     report.score_range      = {0.0, 100.0};
     report.error_score      = -1;
 
-    for (const auto& simulation : composition.simulations) {
-        for (const auto& mission : composition.missions) {
+    for (const auto& [simulation, missions] : composition.simulation_mission_groups) {
+        for (const auto& mission : missions) {
             for (const auto& drone : composition.drones) {
                 for (const auto& lidar : composition.lidars) {
                     try {

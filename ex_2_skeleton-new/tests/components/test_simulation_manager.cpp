@@ -32,13 +32,13 @@ namespace {
 
 dm::types::SimulationCompositionData makeComposition(
     int n_missions, int n_drones, int n_lidars) {
-    std::vector<dm::types::SimulationConfigData> sims{{
+    dm::types::SimulationConfigData sim{
         "data_maps/single_voxel_x2_y4_z2.npy",
         10.0 * dm::cm,
         dm::Position3D{},
         dm::Position3D{50.0*dm::x_extent[dm::cm], 50.0*dm::y_extent[dm::cm], 50.0*dm::z_extent[dm::cm]},
         0.0 * dm::horizontal_angle[dm::deg],
-    }};
+    };
     std::vector<dm::types::MissionConfigData> missions;
     for (int i = 0; i < n_missions; ++i)
         missions.push_back({100, 10.0 * dm::cm, 1});
@@ -51,7 +51,12 @@ dm::types::SimulationCompositionData makeComposition(
     for (int i = 0; i < n_lidars; ++i)
         lidars.push_back({20.0*dm::cm, 120.0*dm::cm, 2.5*dm::cm, 3});
 
-    return {"composition.yaml", sims, missions, drones, lidars};
+    dm::types::SimulationCompositionData comp;
+    comp.composition_file = "composition.yaml";
+    comp.simulation_mission_groups.emplace_back(std::move(sim), std::move(missions));
+    comp.drones = std::move(drones);
+    comp.lidars = std::move(lidars);
+    return comp;
 }
 
 dm::types::SimulationResult okResult(double score = 75.0) {
@@ -153,17 +158,14 @@ TEST_F(SimulationManager, TwoSimulationsProduceTwoRuns) {
             return std::make_unique<MockSimRun>(okResult());
         });
 
-    // 2 sims × 1 mission × 1 drone × 1 lidar = 2 runs
+    // 2 sims × 1 mission each × 1 drone × 1 lidar = 2 runs
+    dm::types::SimulationConfigData sim_cfg{
+        "data_maps/single_voxel_x2_y4_z2.npy", 10.0*dm::cm, dm::Position3D{},
+        dm::Position3D{50.0*dm::x_extent[dm::cm], 50.0*dm::y_extent[dm::cm], 50.0*dm::z_extent[dm::cm]},
+        0.0*dm::horizontal_angle[dm::deg]};
     dm::types::SimulationCompositionData composition;
-    composition.simulations = {
-        {"data_maps/single_voxel_x2_y4_z2.npy", 10.0*dm::cm, dm::Position3D{},
-         dm::Position3D{50.0*dm::x_extent[dm::cm], 50.0*dm::y_extent[dm::cm], 50.0*dm::z_extent[dm::cm]},
-         0.0*dm::horizontal_angle[dm::deg]},
-        {"data_maps/single_voxel_x2_y4_z2.npy", 10.0*dm::cm, dm::Position3D{},
-         dm::Position3D{50.0*dm::x_extent[dm::cm], 50.0*dm::y_extent[dm::cm], 50.0*dm::z_extent[dm::cm]},
-         0.0*dm::horizontal_angle[dm::deg]},
-    };
-    composition.missions = {{100, 10.0*dm::cm, 1}};
+    composition.simulation_mission_groups.emplace_back(sim_cfg, std::vector<dm::types::MissionConfigData>{{100, 10.0*dm::cm, 1}});
+    composition.simulation_mission_groups.emplace_back(sim_cfg, std::vector<dm::types::MissionConfigData>{{100, 10.0*dm::cm, 1}});
     composition.drones   = {{30.0*dm::cm, 45.0*dm::horizontal_angle[dm::deg], 50.0*dm::cm, 40.0*dm::cm}};
     composition.lidars   = {{20.0*dm::cm, 120.0*dm::cm, 2.5*dm::cm, 3}};
 

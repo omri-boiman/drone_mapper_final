@@ -74,11 +74,11 @@ types::LidarConfigData YamlConfigParser::parseLidar(const std::filesystem::path&
 types::MissionConfigData YamlConfigParser::parseMission(const std::filesystem::path& path) {
     const YAML::Node doc = YAML::LoadFile(path.string());
     const YAML::Node mc  = doc["mission_config"];
-    // boundaries are parsed but ignored — bounds now come from the hidden map
     return {
         nodeSize(  mc["max_steps"],                          2400),
         nodeDouble(mc["gps_resolution_cm"],                  10.0) * cm,
         static_cast<double>(nodeInt(mc["output_mapping_resolution_factor"], 1)),
+        readBounds(mc["boundaries"]),
     };
 }
 
@@ -129,14 +129,18 @@ YamlConfigParser::parseCompositionWithPaths(const std::filesystem::path& path) {
     for (const auto& sim_entry : root["simulations"]) {
         const std::filesystem::path sim_path =
             base / sim_entry["simulation_config"].as<std::string>();
-        result.data.simulations.push_back(parseSingleSimulation(sim_path));
+        types::SimulationConfigData sim_cfg = parseSingleSimulation(sim_path);
         result.sim_paths.push_back(sim_path);
 
+        std::vector<types::MissionConfigData> missions;
+        std::vector<std::filesystem::path> mission_paths;
         for (const auto& mc_entry : sim_entry["mission_configs"]) {
             const std::filesystem::path mp = base / mc_entry.as<std::string>();
-            result.data.missions.push_back(parseMission(mp));
-            result.mission_paths.push_back(mp);
+            missions.push_back(parseMission(mp));
+            mission_paths.push_back(mp);
         }
+        result.data.simulation_mission_groups.emplace_back(std::move(sim_cfg), std::move(missions));
+        result.mission_paths_per_sim.push_back(std::move(mission_paths));
     }
 
     if (result.data.drones.empty())

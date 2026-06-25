@@ -4,8 +4,6 @@
 
 #include <algorithm>
 #include <limits>
-#include <thread>
-#include <vector>
 
 namespace drone_mapper {
 
@@ -29,42 +27,27 @@ namespace {
 
 } // namespace
 
-// E: cache step and z-limits at construction to avoid getMapConfig() per beam
 MockLidar::MockLidar(types::LidarConfigData config, const IMap3D& map, const IGPS& gps)
-    : config_(config)
-    , map_(map)
-    , gps_(gps)
-    , step_(0.1 * map.getMapConfig().resolution)
-    , step_cm_(step_.force_numerical_value_in(cm))
-    , max_dist_cm_(config.z_max.force_numerical_value_in(cm))
-    , min_dist_cm_(config.z_min.force_numerical_value_in(cm))
-{}
+    : config_(config), map_(map), gps_(gps) {}
+
+types::LidarConfigData MockLidar::config() const {
+    return config_;
+}
 
 types::LidarScanResult MockLidar::scan(Orientation scan_orientation) const {
+    types::LidarScanResult results;
     if (config_.fov_circles == 0) {
-        return {};
+        return results;
     }
-
-    // Pre-compute total beam count so we can pre-size the result vector
-    std::size_t total = 1; // center beam
-    for (std::size_t c = 1; c < config_.fov_circles; ++c) {
-        total += beams_on_circle(c);
-    }
-
-    // B: build all (absolute, relative) beam pairs, then trace in parallel
-    struct BeamJob {
-        Orientation abs_beam;
-        Orientation rel_beam;
-    };
-    std::vector<BeamJob> jobs;
-    jobs.reserve(total);
 
     const Orientation sensor_heading = gps_.heading();
     const Orientation center_beam_abs{
         scan_orientation.horizontal + sensor_heading.horizontal,
         scan_orientation.altitude + sensor_heading.altitude,
     };
-    jobs.push_back({center_beam_abs, scan_orientation});
+
+    const PhysicalLength center_distance = traceBeam(center_beam_abs);
+    results.push_back(types::LidarHit{center_distance, scan_orientation});
 
     for (std::size_t circle = 1; circle < config_.fov_circles; ++circle) {
         const std::size_t beam_count = beams_on_circle(circle);
@@ -73,7 +56,7 @@ types::LidarScanResult MockLidar::scan(Orientation scan_orientation) const {
         for (std::size_t i = 0; i < beam_count; ++i) {
             const auto theta = (360.0 * static_cast<double>(i) / static_cast<double>(beam_count)) * deg;
             const PhysicalLength horizontal_offset = radius * si::cos(theta);
-            const PhysicalLength altitude_offset   = radius * si::sin(theta);
+            const PhysicalLength altitude_offset = radius * si::sin(theta);
 
             const Orientation offset{
                 horizontal_delta(horizontal_offset, config_.z_min),
@@ -87,31 +70,10 @@ types::LidarScanResult MockLidar::scan(Orientation scan_orientation) const {
                 relative_beam.horizontal + sensor_heading.horizontal,
                 relative_beam.altitude + sensor_heading.altitude,
             };
-            jobs.push_back({absolute_beam, relative_beam});
+            const PhysicalLength distance = traceBeam(absolute_beam);
+            results.push_back(types::LidarHit{distance, relative_beam});
         }
     }
-
-    // Pre-sized result vector — each thread writes to its own index range, no races
-    types::LidarScanResult results(total);
-
-    const std::size_t n_threads = std::max(1u, std::thread::hardware_concurrency());
-    const std::size_t chunk = (total + n_threads - 1) / n_threads;
-
-    std::vector<std::thread> threads;
-    threads.reserve(n_threads);
-
-    for (std::size_t t = 0; t < n_threads; ++t) {
-        const std::size_t begin = t * chunk;
-        if (begin >= total) break;
-        const std::size_t end = std::min(begin + chunk, total);
-
-        threads.emplace_back([this, &jobs, &results, begin, end]() {
-            for (std::size_t i = begin; i < end; ++i) {
-                results[i] = types::LidarHit{traceBeam(jobs[i].abs_beam), jobs[i].rel_beam};
-            }
-        });
-    }
-    for (auto& th : threads) th.join();
 
     return results;
 }
@@ -123,25 +85,24 @@ PhysicalLength MockLidar::traceBeam(const Orientation& beam_orientation) const {
     const auto dy = cos_altitude * si::sin(beam_orientation.horizontal);
     const auto dz = si::sin(beam_orientation.altitude);
 
-    // Hoist all constants outside the inner loop
-    const double dir_x = dx.force_numerical_value_in(mp::one);
-    const double dir_y = dy.force_numerical_value_in(mp::one);
-    const double dir_z = dz.force_numerical_value_in(mp::one);
-    const double ox = origin.x.force_numerical_value_in(cm);
-    const double oy = origin.y.force_numerical_value_in(cm);
-    const double oz = origin.z.force_numerical_value_in(cm);
+    const PhysicalLength step = 0.1 * map_.getMapConfig().resolution;
 
-    for (double dist_cm = 0.0; dist_cm <= max_dist_cm_; dist_cm += step_cm_) {
+    for (PhysicalLength distance = 0.0 * cm; distance <= config_.z_max; distance += step) {
+        const double distance_cm = distance.force_numerical_value_in(cm);
+        const double dir_x = dx.force_numerical_value_in(mp::one);
+        const double dir_y = dy.force_numerical_value_in(mp::one);
+        const double dir_z = dz.force_numerical_value_in(mp::one);
+
         const Position3D sample{
-            (ox + dir_x * dist_cm) * x_extent[cm],
-            (oy + dir_y * dist_cm) * y_extent[cm],
-            (oz + dir_z * dist_cm) * z_extent[cm],
+            origin.x + dir_x * distance_cm * x_extent[cm],
+            origin.y + dir_y * distance_cm * y_extent[cm],
+            origin.z + dir_z * distance_cm * z_extent[cm],
         };
         if (map_.atVoxel(sample) == types::VoxelOccupancy::Occupied) {
-            if (dist_cm < min_dist_cm_) {
+            if (distance < config_.z_min) {
                 return 0.0 * cm;
             }
-            return dist_cm * cm;
+            return distance;
         }
     }
     return std::numeric_limits<double>::max() * cm;
