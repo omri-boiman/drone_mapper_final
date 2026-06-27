@@ -10,212 +10,311 @@
 #include <queue>
 #include <unordered_map>
 #include <unordered_set>
-#include <utility>
+#include <vector>
 
 namespace drone_mapper {
 
 namespace {
 constexpr double toCm(PhysicalLength l)  { return l.force_numerical_value_in(cm); }
-constexpr double toXcm(XLength l)        { return l.force_numerical_value_in(cm); }
-constexpr double toYcm(YLength l)        { return l.force_numerical_value_in(cm); }
-constexpr double toZcm(ZLength l)        { return l.force_numerical_value_in(cm); }
 constexpr double toDeg(HorizontalAngle a){ return a.force_numerical_value_in(deg); }
+
+const std::array<types::GridCell3D, 6> kDirs = {{
+    {1, 0, 0}, {-1, 0, 0},
+    {0, 1, 0}, {0, -1, 0},
+    {0, 0, 1}, {0, 0, -1},
+}};
 } // namespace
 
-void MappingAlgorithmImpl::initialize(const types::DroneState& state) {
-    nav_step_    = drone_config_.max_advance;
+// ---------------------------------------------------------------------------
+// Initialization
+// ---------------------------------------------------------------------------
+
+void MappingAlgorithmImpl::initialize(const types::DroneState& /*state*/) {
     max_rotate_  = drone_config_.max_rotate;
+    max_advance_ = drone_config_.max_advance;
     max_elevate_ = drone_config_.max_elevate;
-
-    const auto map_cfg = output_map_.getMapConfig();
-    min_x_      = map_cfg.boundaries.min_x;
-    max_x_      = map_cfg.boundaries.max_x;
-    min_y_      = map_cfg.boundaries.min_y;
-    max_y_      = map_cfg.boundaries.max_y;
-    min_height_ = map_cfg.boundaries.min_height;
-    max_height_ = map_cfg.boundaries.max_height;
-
-    const double start_z     = state.position.z.force_numerical_value_in(cm);
-    const double max_elev_cm = toCm(max_elevate_);
-    const double min_flyable = toZcm(min_height_) + max_elev_cm;
-    const double max_flyable = toZcm(max_height_) - max_elev_cm;
-
-    for (double h = start_z; h >= min_flyable - 0.5; h -= max_elev_cm)
-        height_levels_cm_.push_back(h);
-    for (double h = start_z + max_elev_cm; h <= max_flyable + 0.5; h += max_elev_cm)
-        height_levels_cm_.push_back(h);
-
-    if (height_levels_cm_.empty())
-        height_levels_cm_.push_back(start_z);
-
-    height_level_index_ = 0;
-    pending_level_idx_  = -1;
-    initialized_ = true;
-    needs_scan_  = true;
+    map_cfg_     = output_map_.getMapConfig();
+    res_cm_      = toCm(map_cfg_.resolution);
+    if (res_cm_ <= 0.0) res_cm_ = 1.0;
+    const double radius_cm = toCm(drone_config_.radius);
+    const double phys_r    = radius_cm / res_cm_;
+    phys_r2_        = phys_r * phys_r;
+    radius_voxels_  = (phys_r > 0.0) ? static_cast<int>(std::ceil(phys_r)) : 1;
+    const double z_max_cm = toCm(lidar_config_.z_max);
+    los_L_ = (z_max_cm > 0.0) ? std::max(2.0, std::ceil(z_max_cm / res_cm_ / 4.0)) : 3.0;
+    // Small drones (r² < 1) fit through any opening and never escape to the roof, so
+    // the structure weight only adds noise inside the building.  Disable it for them.
+    // Medium/large drones need it to prefer interior (many walls) over exterior sky.
+    w_struct_ = (phys_r2_ >= 1.0) ? 4.0 : 0.0;
+    initialized_    = true;
+    needs_scan_     = true;
 }
 
-MappingAlgorithmImpl::GridCell2D
-MappingAlgorithmImpl::worldToGrid(const Position3D& pos) const {
-    const double step = toCm(nav_step_) > 0.0 ? toCm(nav_step_) : 1.0;
+// ---------------------------------------------------------------------------
+// Voxel <-> world conversion (mirrors Map3DImpl::toIndex)
+// ---------------------------------------------------------------------------
+
+MappingAlgorithmImpl::Cell
+MappingAlgorithmImpl::worldToVoxel(const Position3D& pos) const {
+    const auto& b = map_cfg_.boundaries;
     return {
-        static_cast<int>(std::floor(pos.x.force_numerical_value_in(cm) / step)),
-        static_cast<int>(std::floor(pos.y.force_numerical_value_in(cm) / step)),
+        static_cast<int>(std::floor(
+            (pos.x.force_numerical_value_in(cm) - b.min_x.force_numerical_value_in(cm)) / res_cm_)),
+        static_cast<int>(std::floor(
+            (pos.y.force_numerical_value_in(cm) - b.min_y.force_numerical_value_in(cm)) / res_cm_)),
+        static_cast<int>(std::floor(
+            (pos.z.force_numerical_value_in(cm) - b.min_height.force_numerical_value_in(cm)) / res_cm_)),
     };
 }
 
-Position3D MappingAlgorithmImpl::gridToWorld(const GridCell2D& cell,
-                                              double height_cm) const {
-    const double step_cm = toCm(nav_step_);
+Position3D MappingAlgorithmImpl::centerOf(const Cell& c) const {
+    const auto& b = map_cfg_.boundaries;
     return {
-        cell.x * step_cm * x_extent[cm],
-        cell.y * step_cm * y_extent[cm],
-        height_cm         * z_extent[cm],
+        (b.min_x.force_numerical_value_in(cm)      + (c.x + 0.5) * res_cm_) * x_extent[cm],
+        (b.min_y.force_numerical_value_in(cm)      + (c.y + 0.5) * res_cm_) * y_extent[cm],
+        (b.min_height.force_numerical_value_in(cm) + (c.z + 0.5) * res_cm_) * z_extent[cm],
     };
 }
 
-bool MappingAlgorithmImpl::isInBounds(const GridCell2D& cell) const {
-    const double step_cm = toCm(nav_step_);
-    const double wx = cell.x * step_cm;
-    const double wy = cell.y * step_cm;
-    return wx >= toXcm(min_x_) && wx <= toXcm(max_x_)
-        && wy >= toYcm(min_y_) && wy <= toYcm(max_y_);
+types::VoxelOccupancy MappingAlgorithmImpl::stateOf(const Cell& c) const {
+    return output_map_.atVoxel(centerOf(c));
 }
 
-bool MappingAlgorithmImpl::isWalkable(const GridCell2D& cell, int level_idx) const {
-    if (!isInBounds(cell)) return false;
-    const Cell3D key{cell.x, cell.y, level_idx};
-    const auto it = obstacle_cache_.find(key);
-    if (it != obstacle_cache_.end()) return !it->second;
+// ---------------------------------------------------------------------------
+// Navigability and frontier detection
+// ---------------------------------------------------------------------------
+
+bool MappingAlgorithmImpl::navigable(const Cell& c) const {
+    if (stateOf(c) != types::VoxelOccupancy::Empty) return false;
+    // Use physical (float) r² so a 1.5-voxel-radius drone doesn't get inflated to 2
+    // by integer rounding — that would wrongly block passage through 4-wide openings.
+    for (int dx = -radius_voxels_; dx <= radius_voxels_; ++dx) {
+        for (int dy = -radius_voxels_; dy <= radius_voxels_; ++dy) {
+            for (int dz = -radius_voxels_; dz <= radius_voxels_; ++dz) {
+                if (dx == 0 && dy == 0 && dz == 0) continue;
+                if (static_cast<double>(dx*dx + dy*dy + dz*dz) > phys_r2_) continue;
+                const auto s = stateOf({c.x + dx, c.y + dy, c.z + dz});
+                if (s == types::VoxelOccupancy::Occupied          ||
+                    s == types::VoxelOccupancy::PotentiallyOccupied ||
+                    s == types::VoxelOccupancy::OutOfBounds)
+                    return false;
+            }
+        }
+    }
     return true;
 }
 
-void MappingAlgorithmImpl::expandFrontier(const GridCell2D& cell,
-                                           int level_idx, double height_cm) {
-    const std::array<GridCell2D, 4> neighbors = {{
-        {cell.x + 1, cell.y},
-        {cell.x - 1, cell.y},
-        {cell.x,     cell.y + 1},
-        {cell.x,     cell.y - 1},
-    }};
-    for (const auto& nb : neighbors) {
-        const Cell3D c3d{nb.x, nb.y, level_idx};
-        if (!visited_3d_.count(c3d) && !frontier_3d_.count(c3d)
-            && isWalkable(nb, level_idx)
-            && hasClearance(cell, nb, level_idx, height_cm))
-            frontier_3d_.insert(c3d);
+bool MappingAlgorithmImpl::clearForBodyKnown(const Cell& c) const {
+    if (stateOf(c) != types::VoxelOccupancy::Empty) return false;
+    for (int dx = -radius_voxels_; dx <= radius_voxels_; ++dx) {
+        for (int dy = -radius_voxels_; dy <= radius_voxels_; ++dy) {
+            for (int dz = -radius_voxels_; dz <= radius_voxels_; ++dz) {
+                if (dx == 0 && dy == 0 && dz == 0) continue;
+                if (static_cast<double>(dx*dx + dy*dy + dz*dz) > phys_r2_) continue;
+                const auto s = stateOf({c.x + dx, c.y + dy, c.z + dz});
+                if (s == types::VoxelOccupancy::Occupied           ||
+                    s == types::VoxelOccupancy::PotentiallyOccupied ||
+                    s == types::VoxelOccupancy::OutOfBounds)
+                    return false;
+            }
+        }
     }
-
-    for (int delta : {-1, +1}) {
-        const int lvl = level_idx + delta;
-        if (lvl < 0 || lvl >= static_cast<int>(height_levels_cm_.size())) continue;
-        const Cell3D key{cell.x, cell.y, lvl};
-        if (obstacle_cache_.count(key) && obstacle_cache_.at(key)) continue;
-        const Cell3D c3d{cell.x, cell.y, lvl};
-        if (!visited_3d_.count(c3d) && !frontier_3d_.count(c3d))
-            frontier_3d_.insert(c3d);
-    }
+    return true;
 }
 
-MappingAlgorithmImpl::Cell3D
-MappingAlgorithmImpl::findNearest3DFrontier(const GridCell2D& from,
-                                              int from_level) const {
-    Cell3D best{std::numeric_limits<int>::min(), 0, 0};
-    int best_dist = std::numeric_limits<int>::max();
+bool MappingAlgorithmImpl::clearForBody(const Cell& c) const {
+    if (!clearForBodyKnown(c)) return false;
+    // Only check HORIZONTAL face-neighbours for Unmapped status.
+    // Vertical (z) neighbours are routinely Unmapped in maps with low fov_circles lidar
+    // because the lidar has limited elevation coverage; blocking on them causes deadlocks
+    // in building interiors.  Horizontal Unmapped neighbours are the real collision risk:
+    // wall/obstacle surfaces in x-y cause crashes when the drone body just touches them.
+    for (const auto& d : kDirs) {
+        if (d.z != 0) continue;   // vertical direction — skip
+        if (stateOf({c.x + d.x, c.y + d.y, c.z + d.z}) == types::VoxelOccupancy::Unmapped)
+            return false;
+    }
+    return true;
+}
 
-    for (const auto& c3d : frontier_3d_) {
-        const int d = std::abs(c3d.x - from.x)
-                    + std::abs(c3d.y - from.y)
-                    + std::abs(c3d.z - from_level);
-        if (d < best_dist) { best_dist = d; best = c3d; }
+bool MappingAlgorithmImpl::isFrontier(const Cell& c) const {
+    if (!navigable(c)) return false;
+    // Only horizontal (dz=0) face-neighbours count.  Vertical Unmapped neighbours
+    // are routinely present due to limited lidar elevation coverage (fov_circles) and
+    // can never be fully resolved from accessible positions, so treating them as
+    // frontier triggers infinite exploration loops without score benefit.
+    for (const auto& d : kDirs) {
+        if (d.z != 0) continue;
+        if (stateOf({c.x + d.x, c.y + d.y, c.z + d.z}) == types::VoxelOccupancy::Unmapped)
+            return true;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Value-based frontier selection (Change 1 + 2)
+// ---------------------------------------------------------------------------
+
+MappingAlgorithmImpl::Cell
+MappingAlgorithmImpl::selectBestFrontier(const Cell& from) const {
+    // Cache navigability to avoid recomputing the sphere check per cell.
+    std::unordered_map<Cell, bool, CellHash> nav_cache;
+    auto isNav = [&](const Cell& c) -> bool {
+        auto [it, ins] = nav_cache.emplace(c, false);
+        if (!ins) return it->second;
+        return (it->second = navigable(c));
+    };
+
+    // O(1) lookup for the anti-oscillation guard (Change 2).
+    std::unordered_set<Cell, CellHash> recent_set(recent_targets_.begin(), recent_targets_.end());
+
+    // Blended score: (gain + w_struct_ * structure) / (1 + beta_ * dist)
+    // w_struct_=0 for small drones (pure gain/dist ≈ nearest frontier — no escape risk).
+    // w_struct_=4 for medium/large drones (interior wins over exterior sky by structure count).
+    const int L = static_cast<int>(los_L_);
+
+    auto countCube = [&](const Cell& c) -> std::pair<int,int> {
+        int gain = 0, structure = 0;
+        for (int dx = -L; dx <= L; ++dx)
+            for (int dy = -L; dy <= L; ++dy)
+                for (int dz = -L; dz <= L; ++dz) {
+                    const auto s = stateOf({c.x+dx, c.y+dy, c.z+dz});
+                    if      (s == types::VoxelOccupancy::Unmapped)           ++gain;
+                    else if (s == types::VoxelOccupancy::Occupied ||
+                             s == types::VoxelOccupancy::PotentiallyOccupied) ++structure;
+                }
+        return {gain, structure};
+    };
+
+    std::unordered_map<Cell, int, CellHash> dist;
+    std::queue<Cell> q;
+
+    dist[from] = 0;
+
+    // Seed from `from`'s navigable neighbors (from itself may not be carved yet).
+    for (const auto& d : kDirs) {
+        const Cell nb{from.x+d.x, from.y+d.y, from.z+d.z};
+        if (dist.count(nb)) continue;
+        if (stateOf(nb) == types::VoxelOccupancy::OutOfBounds) continue;
+        dist[nb] = 1;
+        if (isNav(nb)) q.push(nb);
+    }
+
+    Cell   best{std::numeric_limits<int>::min(), 0, 0};
+    double best_score = -1.0;
+
+    auto tryCandidate = [&](const Cell& c, int d_val) {
+        auto [gain, structure] = countCube(c);
+        const double sc = (gain + w_struct_ * structure) / (1.0 + beta_ * d_val);
+        if (sc > best_score) { best_score = sc; best = c; }
+    };
+
+    // Also check `from` itself.
+    auto notExhausted = [&](const Cell& c) {
+        auto it = frontier_try_count_.find(c);
+        return it == frontier_try_count_.end() || it->second < 5;
+    };
+    if (isFrontier(from) && !recent_set.count(from) && notExhausted(from))
+        tryCandidate(from, 0);
+
+    int pops = 0;
+    constexpr int MAX_POPS = 50000;
+
+    while (!q.empty() && pops < MAX_POPS) {
+        const Cell cur = q.front(); q.pop();
+        ++pops;
+        const int d_cur = dist[cur];
+
+        if (!recent_set.count(cur) && notExhausted(cur)) {
+            // cur is navigable (only navigable cells are enqueued).
+            for (const auto& d : kDirs) {
+                if (stateOf({cur.x+d.x, cur.y+d.y, cur.z+d.z}) == types::VoxelOccupancy::Unmapped) {
+                    tryCandidate(cur, d_cur);
+                    break;
+                }
+            }
+        }
+
+        for (const auto& d : kDirs) {
+            const Cell nb{cur.x+d.x, cur.y+d.y, cur.z+d.z};
+            if (dist.count(nb)) continue;
+            if (stateOf(nb) == types::VoxelOccupancy::OutOfBounds) continue;
+            dist[nb] = d_cur + 1;
+            if (isNav(nb)) q.push(nb);
+        }
     }
     return best;
 }
 
-bool MappingAlgorithmImpl::hasClearance(const GridCell2D& from, const GridCell2D& to,
-                                         int level_idx, double height_cm) const {
-    const double radius_cm = toCm(drone_config_.radius);
-    const double step_cm   = toCm(nav_step_);
-    const double tx = to.x * step_cm;
-    const double ty = to.y * step_cm;
+// ---------------------------------------------------------------------------
+// 3D A*: path over navigable voxels
+// ---------------------------------------------------------------------------
 
-    auto wall_at_xy = [&](double wx, double wy) -> bool {
-        const int ix = static_cast<int>(std::round(wx));
-        const int iy = static_cast<int>(std::round(wy));
-        return fine_wall_xy_.count({ix, iy}) > 0;
-    };
-
-    const bool moving_in_x = (to.x != from.x);
-
-    auto occupied = [&](double wx, double wy, double wz) {
-        const Position3D pos{wx * x_extent[cm], wy * y_extent[cm], wz * z_extent[cm]};
-        const GridCell2D cell = worldToGrid(pos);
-        const Cell3D key{cell.x, cell.y, level_idx};
-        const auto it = obstacle_cache_.find(key);
-        return it != obstacle_cache_.end() && it->second;
-    };
-
-    if (moving_in_x) {
-        return !wall_at_xy(tx, ty - radius_cm)
-            && !wall_at_xy(tx, ty + radius_cm)
-            && !occupied(tx, ty, height_cm - radius_cm)
-            && !occupied(tx, ty, height_cm + radius_cm);
-    } else {
-        return !wall_at_xy(tx - radius_cm, ty)
-            && !wall_at_xy(tx + radius_cm, ty)
-            && !occupied(tx, ty, height_cm - radius_cm)
-            && !occupied(tx, ty, height_cm + radius_cm);
-    }
-}
-
-std::vector<MappingAlgorithmImpl::GridCell2D>
-MappingAlgorithmImpl::findPath(const GridCell2D& from, const GridCell2D& to,
-                                int level_idx, double /*height_cm*/) {
+std::vector<MappingAlgorithmImpl::Cell>
+MappingAlgorithmImpl::findPath3D(const Cell& from, const Cell& to) const {
     if (from == to) return {from};
 
-    auto heuristic = [](const GridCell2D& a, const GridCell2D& b) {
-        return std::abs(a.x - b.x) + std::abs(a.y - b.y);
+    auto heuristic = [](const Cell& a, const Cell& b) {
+        return std::abs(a.x - b.x) + std::abs(a.y - b.y) + std::abs(a.z - b.z);
     };
 
-    using Entry = std::pair<int, GridCell2D>;
-    std::priority_queue<Entry, std::vector<Entry>, std::greater<>> open;
-    std::unordered_map<GridCell2D, int,        GridCell2DHash> g_score;
-    std::unordered_map<GridCell2D, GridCell2D, GridCell2DHash> parent;
-    std::unordered_set<GridCell2D, GridCell2DHash>             closed;
+    auto reconstruct = [&](const std::unordered_map<Cell, Cell, CellHash>& parent,
+                           const Cell& end) {
+        std::vector<Cell> path;
+        for (Cell n = end; !(n == from); n = parent.at(n))
+            path.push_back(n);
+        path.push_back(from);
+        std::reverse(path.begin(), path.end());
+        return path;
+    };
 
-    g_score[from] = 0;
-    parent[from]  = from;
+    using Entry = std::pair<int, Cell>;
+    std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> open;
+    std::unordered_map<Cell, int,  CellHash> g;
+    std::unordered_map<Cell, Cell, CellHash> parent;
+    std::unordered_set<Cell, CellHash>       closed;
+
+    g[from] = 0;
+    parent[from] = from;
     open.push({heuristic(from, to), from});
+
+    // Track the closest clearForBody cell reached so far for a partial-path fallback.
+    Cell best_partial   = from;
+    int  best_h_partial = heuristic(from, to);
 
     while (!open.empty()) {
         auto [f, cur] = open.top(); open.pop();
         if (closed.count(cur)) continue;
         closed.insert(cur);
 
-        if (cur == to) {
-            std::vector<GridCell2D> path;
-            for (GridCell2D n = to; !(n == from); n = parent[n])
-                path.push_back(n);
-            path.push_back(from);
-            std::reverse(path.begin(), path.end());
-            return path;
-        }
+        if (cur == to) return reconstruct(parent, to);
 
-        const std::array<GridCell2D, 4> neighbors = {{
-            {cur.x + 1, cur.y}, {cur.x - 1, cur.y},
-            {cur.x, cur.y + 1}, {cur.x, cur.y - 1},
-        }};
-        for (const auto& nb : neighbors) {
-            if (closed.count(nb) || !isWalkable(nb, level_idx)) continue;
-            const int tg = g_score[cur] + 1;
-            if (!g_score.count(nb) || tg < g_score[nb]) {
-                g_score[nb] = tg;
-                parent[nb]  = cur;
+        // Update best-partial even if goal unreachable (cur is always clearForBody here).
+        const int h_cur = heuristic(cur, to);
+        if (h_cur < best_h_partial) { best_h_partial = h_cur; best_partial = cur; }
+
+        for (const auto& d : kDirs) {
+            const Cell nb{cur.x + d.x, cur.y + d.y, cur.z + d.z};
+            if (closed.count(nb)) continue;
+            if (!clearForBody(nb)) continue;
+            const int tg = g[cur] + 1;
+            if (!g.count(nb) || tg < g[nb]) {
+                g[nb] = tg;
+                parent[nb] = cur;
                 open.push({tg + heuristic(nb, to), nb});
             }
         }
     }
-    return {};
+
+    // Goal unreachable via clear space — return path to the closest clear cell we reached.
+    if (!(best_partial == from))
+        return reconstruct(parent, best_partial);
+    return {from};  // couldn't move at all
 }
+
+// ---------------------------------------------------------------------------
+// Command generation
+// ---------------------------------------------------------------------------
 
 void MappingAlgorithmImpl::enqueueRotateToAngle(double target_deg, double& current_deg) {
     double diff = target_deg - current_deg;
@@ -225,10 +324,10 @@ void MappingAlgorithmImpl::enqueueRotateToAngle(double target_deg, double& curre
     const auto dir = (diff >= 0.0) ? types::RotationDirection::Right
                                    : types::RotationDirection::Left;
     double remaining = std::abs(diff);
+    const double max_rot = toDeg(max_rotate_);
 
-    const double max_rot_deg = toDeg(max_rotate_);
     while (remaining > 0.5) {
-        const double step = std::min(remaining, max_rot_deg);
+        const double step = std::min(remaining, max_rot);
         pending_commands_.push_back({
             types::MovementCommandType::Rotate, dir,
             step * horizontal_angle[deg], 0.0 * cm,
@@ -240,119 +339,83 @@ void MappingAlgorithmImpl::enqueueRotateToAngle(double target_deg, double& curre
     }
 }
 
-void MappingAlgorithmImpl::enqueueNavigationTo(const GridCell2D& from,
-                                                const GridCell2D& to,
-                                                int level_idx,
-                                                double height_cm,
-                                                double& sim_heading_deg) {
-    const auto path = findPath(from, to, level_idx, height_cm);
+void MappingAlgorithmImpl::enqueueNavigationTo(const Cell& from, const Cell& to,
+                                                double& heading_deg) {
+    const auto path = findPath3D(from, to);
     if (path.size() < 2) return;
 
+    const double max_adv  = toCm(max_advance_);
+    const double max_elev = toCm(max_elevate_);
+
     for (std::size_t i = 1; i < path.size(); ++i) {
-        const GridCell2D& prev = path[i - 1];
-        const GridCell2D& next = path[i];
+        if (!clearForBody(path[i])) break;
 
-        const double step_cm = toCm(nav_step_);
-        const double dx = static_cast<double>(next.x - prev.x) * step_cm;
-        const double dy = static_cast<double>(next.y - prev.y) * step_cm;
-        double desired = std::atan2(dy, dx) * 180.0 / std::numbers::pi;
-        if (desired < 0.0) desired += 360.0;
+        const Position3D p0 = centerOf(path[i - 1]);
+        const Position3D p1 = centerOf(path[i]);
+        const double dx = p1.x.force_numerical_value_in(cm) - p0.x.force_numerical_value_in(cm);
+        const double dy = p1.y.force_numerical_value_in(cm) - p0.y.force_numerical_value_in(cm);
+        const double dz = p1.z.force_numerical_value_in(cm) - p0.z.force_numerical_value_in(cm);
 
-        enqueueRotateToAngle(desired, sim_heading_deg);
+        if (std::abs(dz) > 0.1) {
+            double diff = dz;
+            while (std::abs(diff) > 0.1) {
+                const double step = (diff > 0.0)
+                    ? std::min(diff,  max_elev)
+                    : std::max(diff, -max_elev);
+                pending_commands_.push_back({
+                    types::MovementCommandType::Elevate,
+                    types::RotationDirection::Left,
+                    0.0 * horizontal_angle[deg],
+                    step * isq::length[cm],
+                });
+                diff -= step;
+            }
+        } else {
+            double desired = std::atan2(dy, dx) * 180.0 / std::numbers::pi;
+            if (desired < 0.0) desired += 360.0;
+            enqueueRotateToAngle(desired, heading_deg);
 
-        double dist = std::sqrt(dx * dx + dy * dy);
-        while (dist > 0.1) {
-            const double step = std::min(dist, step_cm);
-            pending_commands_.push_back({
-                types::MovementCommandType::Advance,
-                types::RotationDirection::Left,
-                0.0 * horizontal_angle[deg],
-                step * isq::length[cm],
-            });
-            dist -= step;
-        }
-    }
-}
-
-void MappingAlgorithmImpl::applyFiltered(const std::vector<types::MappedVoxel>& voxels) {
-    for (const auto& v : voxels) {
-        if (v.value != types::VoxelOccupancy::Occupied) continue;
-
-        const double vz = v.position.z.force_numerical_value_in(cm);
-        const double vx = v.position.x.force_numerical_value_in(cm);
-        const double vy = v.position.y.force_numerical_value_in(cm);
-        const GridCell2D cell = worldToGrid(v.position);
-
-        fine_wall_xy_.emplace(static_cast<int>(std::round(vx)),
-                              static_cast<int>(std::round(vy)));
-
-        for (int lvl = 0; lvl < static_cast<int>(height_levels_cm_.size()); ++lvl) {
-            const double level_z = height_levels_cm_[lvl];
-            if (std::abs(vz - level_z) <= toCm(max_elevate_) + 0.5) {
-                obstacle_cache_[{cell.x, cell.y, lvl}] = true;
-                frontier_3d_.erase({cell.x, cell.y, lvl});
+            double dist = std::sqrt(dx * dx + dy * dy);
+            while (dist > 0.1) {
+                const double step = std::min(dist, max_adv);
+                pending_commands_.push_back({
+                    types::MovementCommandType::Advance,
+                    types::RotationDirection::Left,
+                    0.0 * horizontal_angle[deg],
+                    step * isq::length[cm],
+                });
+                dist -= step;
             }
         }
     }
 }
 
+// ---------------------------------------------------------------------------
+// Main step
+// ---------------------------------------------------------------------------
+
 types::MappingStepCommand MappingAlgorithmImpl::nextStep(
     const types::DroneState& state,
-    const types::LidarScanResult* latest_scan) {
+    const types::LidarScanResult* /*latest_scan*/) {
 
     if (!initialized_) initialize(state);
     if (done_) return {std::nullopt, std::nullopt, types::AlgorithmStatus::Finished};
 
-    // Process incoming scan result — extract occupied hit positions inline
-    if (latest_scan != nullptr) {
-        constexpr double miss_threshold = std::numeric_limits<double>::max() / 2.0;
-        std::vector<types::MappedVoxel> hits;
-        for (const auto& hit : *latest_scan) {
-            const double d_cm = hit.distance.force_numerical_value_in(cm);
-            if (d_cm <= 0.0 || d_cm > miss_threshold) continue;
-            const double horiz_deg =
-                (state.heading.horizontal + hit.angle.horizontal).force_numerical_value_in(deg);
-            const double alt_deg =
-                (state.heading.altitude + hit.angle.altitude).force_numerical_value_in(deg);
-            const double horiz_rad = horiz_deg * std::numbers::pi / 180.0;
-            const double alt_rad   = alt_deg   * std::numbers::pi / 180.0;
-            const double ca = std::cos(alt_rad);
-            const double ox = state.position.x.force_numerical_value_in(cm);
-            const double oy = state.position.y.force_numerical_value_in(cm);
-            const double oz = state.position.z.force_numerical_value_in(cm);
-            hits.push_back({{
-                (ox + ca * std::cos(horiz_rad) * d_cm) * x_extent[cm],
-                (oy + ca * std::sin(horiz_rad) * d_cm) * y_extent[cm],
-                (oz + std::sin(alt_rad) * d_cm)        * z_extent[cm],
-            }, types::VoxelOccupancy::Occupied});
-        }
-        applyFiltered(hits);
-    }
+    const Orientation scan_req{0.0 * horizontal_angle[deg], 0.0 * altitude_angle[deg]};
 
-    // Drain pending commands (rotation scan or navigation)
+    // 1) Drain any pending commands.
     if (!pending_commands_.empty()) {
-        const auto cmd = pending_commands_.front();
+        auto cmd = pending_commands_.front();
         pending_commands_.pop_front();
-        // Always request a scan so the algorithm keeps receiving obstacle data
-        const Orientation scan_req{0.0 * horizontal_angle[deg], 0.0 * altitude_angle[deg]};
         return {cmd, scan_req, types::AlgorithmStatus::Working};
     }
 
-    const GridCell2D cur_cell   = worldToGrid(state.position);
+    const Cell cur = worldToVoxel(state.position);
 
+    // 2) On arrival at a new waypoint: do a 360° yaw sweep so the harness
+    //    can carve the map and reveal navigable space around us.
     if (needs_scan_) {
-        // Arrived at a new position: update level, expand frontier, queue 360° rotation scan
-        if (pending_level_idx_ >= 0) {
-            height_level_index_ = static_cast<std::size_t>(pending_level_idx_);
-            pending_level_idx_  = -1;
-        }
-
-        const int    cur_level  = static_cast<int>(height_level_index_);
-        const double cur_height = height_levels_cm_[cur_level];
-
         needs_scan_ = false;
-        visited_3d_.insert({cur_cell.x, cur_cell.y, cur_level});
-        expandFrontier(cur_cell, cur_level, cur_height);
 
         const double rot_step = std::min(11.25, toDeg(max_rotate_));
         const int    n_steps  = static_cast<int>(std::ceil(360.0 / rot_step));
@@ -365,60 +428,65 @@ types::MappingStepCommand MappingAlgorithmImpl::nextStep(
             });
         }
 
-        const auto cmd = pending_commands_.front();
+        auto cmd = pending_commands_.front();
         pending_commands_.pop_front();
-        const Orientation scan_req{0.0 * horizontal_angle[deg], 0.0 * altitude_angle[deg]};
         return {cmd, scan_req, types::AlgorithmStatus::Working};
     }
 
-    // Navigation phase: find nearest unvisited frontier
-    const int    cur_level  = static_cast<int>(height_level_index_);
-    const double cur_height = height_levels_cm_[cur_level];
-
-    const Cell3D target = findNearest3DFrontier(cur_cell, cur_level);
-
-    if (target.x == std::numeric_limits<int>::min()) {
-        done_ = true;
-        return {std::nullopt, std::nullopt, types::AlgorithmStatus::Finished};
-    }
-
-    frontier_3d_.erase(target);
-    visited_3d_.insert(target);  // prevent re-adding if drone stalls at current cell
-    const GridCell2D target_cell{target.x, target.y};
-    const int        target_level = target.z;
-
-    double sim_heading = state.heading.horizontal.force_numerical_value_in(deg);
-    enqueueNavigationTo(cur_cell, target_cell, cur_level, cur_height, sim_heading);
-
-    if (target_level != cur_level) {
-        const double target_h    = height_levels_cm_[target_level];
-        const double max_elev_cm = toCm(max_elevate_);
-        double diff = target_h - cur_height;
-        while (std::abs(diff) > 0.1) {
-            const double step = (diff > 0.0)
-                ? std::min( diff,  max_elev_cm)
-                : std::max( diff, -max_elev_cm);
-            pending_commands_.push_back({
-                types::MovementCommandType::Elevate,
-                types::RotationDirection::Left,
-                0.0 * horizontal_angle[deg],
-                step * isq::length[cm],
-            });
-            diff -= step;
+    // 3) Value-based frontier selection (Change 1/2) with retry (Change 3).
+    Cell frontier = selectBestFrontier(cur);
+    if (frontier.x == std::numeric_limits<int>::min()) {
+        // First failure: the recent_targets_ guard may have hidden the last frontier.
+        // Clear it and retry once before declaring done (Change 3).
+        recent_targets_.clear();
+        frontier = selectBestFrontier(cur);
+        if (frontier.x == std::numeric_limits<int>::min()) {
+            done_ = true;
+            return {std::nullopt, std::nullopt,
+                    types::AlgorithmStatus::FinishedWithUnmappableVoxels};
         }
-        pending_level_idx_ = target_level;
     }
 
+    // Track attempts per frontier.  Permanently-shadowed cells accumulate count >= 5
+    // and are excluded from future selections, guaranteeing eventual termination.
+    ++frontier_try_count_[frontier];
+
+    // Push chosen target into the anti-oscillation guard (Change 2).
+    recent_targets_.push_back(frontier);
+    if (recent_targets_.size() > 8) recent_targets_.pop_front();
+
+    double heading_deg = toDeg(state.heading.horizontal);
+    enqueueNavigationTo(cur, frontier, heading_deg);
     needs_scan_ = true;
 
     if (pending_commands_.empty()) {
-        done_ = true;
-        return {std::nullopt, std::nullopt, types::AlgorithmStatus::FinishedWithUnmappableVoxels};
+        // The frontier has a horizontal Unmapped face-neighbour blocking clearForBody;
+        // the path stopped at the current cell.  Scan from here to reveal that neighbour.
+        ++stuck_scan_count_;
+        if (stuck_scan_count_ > 10) {
+            // Still stuck after 10 consecutive scans with no movement: the remaining
+            // frontiers are unreachable from any accessible position — declare done.
+            done_ = true;
+            return {std::nullopt, std::nullopt,
+                    types::AlgorithmStatus::FinishedWithUnmappableVoxels};
+        }
+        needs_scan_ = false;
+        const double rot_step = std::min(11.25, toDeg(max_rotate_));
+        const int    n_steps  = static_cast<int>(std::ceil(360.0 / rot_step));
+        for (int i = 0; i < n_steps; ++i) {
+            pending_commands_.push_back({
+                types::MovementCommandType::Rotate,
+                types::RotationDirection::Right,
+                rot_step * horizontal_angle[deg],
+                0.0 * cm,
+            });
+        }
+    } else {
+        stuck_scan_count_ = 0;  // moved successfully — no longer stuck
     }
 
-    const auto cmd = pending_commands_.front();
+    auto cmd = pending_commands_.front();
     pending_commands_.pop_front();
-    const Orientation scan_req{0.0 * horizontal_angle[deg], 0.0 * altitude_angle[deg]};
     return {cmd, scan_req, types::AlgorithmStatus::Working};
 }
 
