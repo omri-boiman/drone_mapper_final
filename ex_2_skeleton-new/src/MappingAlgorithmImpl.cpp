@@ -46,6 +46,13 @@ void MappingAlgorithmImpl::initialize(const types::DroneState& /*state*/) {
     // the structure weight only adds noise inside the building.  Disable it for them.
     // Medium/large drones need it to prefer interior (many walls) over exterior sky.
     w_struct_ = (phys_r2_ >= 1.0) ? 4.0 : 0.0;
+    // Use finer 5.625° scan step for compact maps (≤20 voxels in each dim); larger maps
+    // need the mobility gained from fewer scan steps per sweep.
+    const auto& b   = map_cfg_.boundaries;
+    const double xv = (b.max_x.force_numerical_value_in(cm) - b.min_x.force_numerical_value_in(cm)) / res_cm_;
+    const double yv = (b.max_y.force_numerical_value_in(cm) - b.min_y.force_numerical_value_in(cm)) / res_cm_;
+    const double zv = (b.max_height.force_numerical_value_in(cm) - b.min_height.force_numerical_value_in(cm)) / res_cm_;
+    rot_step_deg_   = (std::max({xv, yv, zv}) <= 20.0) ? 5.625 : 11.25;
     initialized_    = true;
     needs_scan_     = true;
 }
@@ -417,7 +424,7 @@ types::MappingStepCommand MappingAlgorithmImpl::nextStep(
     if (needs_scan_) {
         needs_scan_ = false;
 
-        const double rot_step = std::min(11.25, toDeg(max_rotate_));
+        const double rot_step = std::min(rot_step_deg_, toDeg(max_rotate_));
         const int    n_steps  = static_cast<int>(std::ceil(360.0 / rot_step));
         for (int i = 0; i < n_steps; ++i) {
             pending_commands_.push_back({
@@ -471,7 +478,7 @@ types::MappingStepCommand MappingAlgorithmImpl::nextStep(
                     types::AlgorithmStatus::FinishedWithUnmappableVoxels};
         }
         needs_scan_ = false;
-        const double rot_step = std::min(11.25, toDeg(max_rotate_));
+        const double rot_step = std::min(rot_step_deg_, toDeg(max_rotate_));
         const int    n_steps  = static_cast<int>(std::ceil(360.0 / rot_step));
         for (int i = 0; i < n_steps; ++i) {
             pending_commands_.push_back({

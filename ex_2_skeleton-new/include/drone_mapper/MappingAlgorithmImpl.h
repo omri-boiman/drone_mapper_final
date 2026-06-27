@@ -26,6 +26,7 @@ private:
     PhysicalLength   max_advance_   = 50.0 * cm;
     PhysicalLength   max_elevate_   = 40.0 * cm;
 
+    double           rot_step_deg_  = 11.25; // degrees per rotation command in scan sweep
     double           los_L_         = 3.0; // neighborhood radius for gain/structure counts
     double           w_struct_      = 4.0; // structure weight — zero for small drones (no escape risk)
     double           beta_          = 0.15; // distance-penalty coefficient
