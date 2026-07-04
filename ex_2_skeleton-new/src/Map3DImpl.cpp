@@ -46,7 +46,8 @@ Map3DImpl::Map3DImpl(const std::filesystem::path& path, PhysicalLength resolutio
         throw std::runtime_error("Map3DImpl: NPY must be row-major: " + path.string());
     if (map_->ValueType() != typeid(int) &&
         map_->ValueType() != typeid(uint8_t) &&
-        map_->ValueType() != typeid(int8_t))
+        map_->ValueType() != typeid(int8_t) &&
+        map_->ValueType() != typeid(char))
         throw std::runtime_error("Map3DImpl: unsupported dtype in '" + path.string() + "'");
 
     x_size_ = map_->Shape()[0];
@@ -103,6 +104,8 @@ types::VoxelOccupancy Map3DImpl::atVoxel(const Position3D& pos) const {
         raw = static_cast<int>(map_->Data<uint8_t>()[idx]);
     else if (vt == typeid(int8_t))
         raw = static_cast<int>(map_->Data<int8_t>()[idx]);
+    else if (vt == typeid(char))
+        raw = static_cast<int>(map_->Data<char>()[idx]);
 
     return raw != 0 ? types::VoxelOccupancy::Occupied : types::VoxelOccupancy::Empty;
 }

@@ -1,5 +1,7 @@
 #include <drone_mapper/SimulationManager.h>
 
+#include <drone_mapper/ErrorLogger.h>
+
 #include <chrono>
 #include <filesystem>
 #include <iomanip>
@@ -35,6 +37,8 @@ types::SimulationManagerReport SimulationManager::run(
     const std::filesystem::path results_dir = output_path / "output_results";
     std::filesystem::create_directories(results_dir);
 
+    ErrorLogger error_log(results_dir / "error.log");
+
     types::SimulationManagerReport report;
     report.generated_at_utc = utcNow();
     report.metric           = "output_map_accuracy";
@@ -49,8 +53,13 @@ types::SimulationManagerReport SimulationManager::run(
                         auto run = run_factory_->create(
                             simulation, mission, drone, lidar, results_dir);
                         if (!run) throw std::runtime_error("factory returned null run");
-                        report.runs.push_back(run->run());
+                        auto result = run->run();
+                        for (const auto& mr : result.mission_results)
+                            for (const auto& err : mr.errors)
+                                error_log.log(err.message);
+                        report.runs.push_back(std::move(result));
                     } catch (const std::exception& e) {
+                        error_log.log(e.what());
                         types::SimulationResult err_result;
                         err_result.simulation_config        = simulation;
                         err_result.mission_config           = mission;

@@ -32,6 +32,12 @@ private:
     double           beta_          = 0.15; // distance-penalty coefficient
 
     bool initialized_      = false;
+    // [CHANGE: Fix 1 — Bootstrap navigation]
+    // Set false initially; becomes true once the drone's cell is inside the map array.
+    // Allows the algorithm to issue Elevate/Advance commands before the first scan sweep
+    // when the drone starts outside the output-map bounds (e.g. house height_offset=150).
+    bool bootstrap_done_   = false;
+    // [END CHANGE: Fix 1]
     bool done_             = false;
     bool needs_scan_       = true;
     int  stuck_scan_count_ = 0;
@@ -52,6 +58,11 @@ private:
     std::vector<Cell> findPath3D(const Cell& from, const Cell& to) const;
     void       enqueueNavigationTo(const Cell& from, const Cell& to, double& heading_deg);
     void       enqueueRotateToAngle(double target_deg, double& current_deg);
+    // [CHANGE: Fix 1 — Bootstrap navigation]
+    // Returns a single movement command that closes the gap toward the map array.
+    // Called only while bootstrap_done_ is false and drone cell is OutOfBounds.
+    types::MappingStepCommand navigateToMap(const types::DroneState& state) const;
+    // [END CHANGE: Fix 1]
 };
 
 } // namespace drone_mapper

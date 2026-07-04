@@ -397,6 +397,71 @@ void MappingAlgorithmImpl::enqueueNavigationTo(const Cell& from, const Cell& to,
     }
 }
 
+// [CHANGE: Fix 1 — Bootstrap navigation]
+// Issues one movement command per call to move the drone toward the map array bounds.
+// Elevate has priority (most common case: house scenario, drone 140 cm below the map).
+// x/y OOB is handled secondarily by rotating toward the map centre then advancing.
+// No scan is requested during bootstrap — the lidar range may not reach the map yet.
+types::MappingStepCommand MappingAlgorithmImpl::navigateToMap(
+        const types::DroneState& state) const {
+    const double z     = state.position.z.force_numerical_value_in(cm);
+    const double min_z = map_cfg_.boundaries.min_height.force_numerical_value_in(cm);
+    const double max_z = map_cfg_.boundaries.max_height.force_numerical_value_in(cm);
+    const double x     = state.position.x.force_numerical_value_in(cm);
+    const double min_x = map_cfg_.boundaries.min_x.force_numerical_value_in(cm);
+    const double max_x = map_cfg_.boundaries.max_x.force_numerical_value_in(cm);
+    const double y     = state.position.y.force_numerical_value_in(cm);
+    const double min_y = map_cfg_.boundaries.min_y.force_numerical_value_in(cm);
+    const double max_y = map_cfg_.boundaries.max_y.force_numerical_value_in(cm);
+    const double max_elev = toCm(max_elevate_);
+    const double max_adv  = toCm(max_advance_);
+
+    if (z < min_z) {
+        // Target just BELOW the map boundary to avoid entering occupied ground voxels.
+        // The outer "near_map" check in nextStep() exits bootstrap once we arrive.
+        const double target = min_z - 0.5;
+        const double dist   = std::min(target - z, max_elev);
+        if (dist <= 0.0) return {std::nullopt, std::nullopt, types::AlgorithmStatus::Working};
+        const types::MovementCommand cmd{types::MovementCommandType::Elevate,
+            types::RotationDirection::Left, 0.0 * horizontal_angle[deg],
+            dist * isq::length[cm]};
+        return {cmd, std::nullopt, types::AlgorithmStatus::Working};
+    }
+    if (z > max_z) {
+        const double target = max_z + 0.5;
+        const double dist   = -(std::min(z - target, max_elev));
+        if (dist >= 0.0) return {std::nullopt, std::nullopt, types::AlgorithmStatus::Working};
+        const types::MovementCommand cmd{types::MovementCommandType::Elevate,
+            types::RotationDirection::Left, 0.0 * horizontal_angle[deg],
+            dist * isq::length[cm]};
+        return {cmd, std::nullopt, types::AlgorithmStatus::Working};
+    }
+    // Rotate to face map centre, then advance.
+    const double cx = (min_x + max_x) / 2.0;
+    const double cy = (min_y + max_y) / 2.0;
+    const double target_deg  = std::atan2(cy - y, cx - x) * 180.0 / std::numbers::pi;
+    const double heading_deg = state.heading.horizontal.force_numerical_value_in(deg);
+    double delta = target_deg - heading_deg;
+    while (delta >  180.0) delta -= 360.0;
+    while (delta < -180.0) delta += 360.0;
+    const double max_rot = toDeg(max_rotate_);
+    if (std::abs(delta) > 1.0) {
+        const double rot = std::clamp(delta, -max_rot, max_rot);
+        const auto dir = rot >= 0.0 ? types::RotationDirection::Right
+                                    : types::RotationDirection::Left;
+        const types::MovementCommand cmd{types::MovementCommandType::Rotate,
+            dir, std::abs(rot) * horizontal_angle[deg], 0.0 * cm};
+        return {cmd, std::nullopt, types::AlgorithmStatus::Working};
+    }
+    const double dist = std::min(max_adv,
+        std::sqrt((cx - x) * (cx - x) + (cy - y) * (cy - y)));
+    const types::MovementCommand cmd{types::MovementCommandType::Advance,
+        types::RotationDirection::Left, 0.0 * horizontal_angle[deg],
+        dist * isq::length[cm]};
+    return {cmd, std::nullopt, types::AlgorithmStatus::Working};
+}
+// [END CHANGE: Fix 1]
+
 // ---------------------------------------------------------------------------
 // Main step
 // ---------------------------------------------------------------------------
@@ -407,6 +472,45 @@ types::MappingStepCommand MappingAlgorithmImpl::nextStep(
 
     if (!initialized_) initialize(state);
     if (done_) return {std::nullopt, std::nullopt, types::AlgorithmStatus::Finished};
+
+    // [CHANGE: Fix 1 — Bootstrap navigation]
+    // If the drone starts outside the output map array (e.g. house: drone at z=10 cm, map
+    // at z=150–460 cm due to height_offset=150), move it close to the map boundary before
+    // the first scan sweep so the lidar can reach the map.
+    // For sc1/sc2/sc3/benchmark the drone always starts inside the map → bootstrap_done_
+    // is set true on the very first call with zero overhead.
+    //
+    // NOTE: the house map's bottom 15 voxel layers are solid ground (value≠0 = Occupied).
+    // The drone CANNOT enter the map; it must scan from just below the boundary.
+    // navigateToMap therefore targets min_height − 0.5 cm (just outside the array), and
+    // once the drone is within one voxel width of the boundary we exit bootstrap and let
+    // the normal scan sweep fire.
+    if (!bootstrap_done_) {
+        if (stateOf(worldToVoxel(state.position)) == types::VoxelOccupancy::OutOfBounds) {
+            const double z     = state.position.z.force_numerical_value_in(cm);
+            const double min_z = map_cfg_.boundaries.min_height.force_numerical_value_in(cm);
+            const double max_z = map_cfg_.boundaries.max_height.force_numerical_value_in(cm);
+            const double x     = state.position.x.force_numerical_value_in(cm);
+            const double min_x = map_cfg_.boundaries.min_x.force_numerical_value_in(cm);
+            const double max_x = map_cfg_.boundaries.max_x.force_numerical_value_in(cm);
+            const double y     = state.position.y.force_numerical_value_in(cm);
+            const double min_y = map_cfg_.boundaries.min_y.force_numerical_value_in(cm);
+            const double max_y = map_cfg_.boundaries.max_y.force_numerical_value_in(cm);
+            // "Close enough" = within one voxel width of every boundary dimension.
+            const bool near_map =
+                z >= min_z - res_cm_ && z <= max_z + res_cm_ &&
+                x >= min_x - res_cm_ && x <= max_x + res_cm_ &&
+                y >= min_y - res_cm_ && y <= max_y + res_cm_;
+            if (near_map) {
+                bootstrap_done_ = true;   // reached the boundary — hand off to sweep
+            } else {
+                return navigateToMap(state);
+            }
+        } else {
+            bootstrap_done_ = true;
+        }
+    }
+    // [END CHANGE: Fix 1]
 
     const Orientation scan_req{0.0 * horizontal_angle[deg], 0.0 * altitude_angle[deg]};
 

@@ -5,6 +5,10 @@
 #include <drone_mapper/ISimulationRunFactory.h>
 #include <drone_mapper/SimulationManager.h>
 
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+
 namespace dm = drone_mapper;
 using ::testing::Return;
 using ::testing::_;
@@ -191,4 +195,47 @@ TEST_F(SimulationManager, ErrorRunsDoNotBlockSubsequentRuns) {
     ASSERT_EQ(report.runs.size(), 2u);
     EXPECT_EQ(report.runs[0].mission_results[0].status, dm::types::MissionRunStatus::Error);
     EXPECT_DOUBLE_EQ(report.runs[1].mission_score, 80.0);
+}
+
+// Helpers for log-content tests
+namespace {
+std::string readFile(const std::filesystem::path& p) {
+    std::ifstream f(p);
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    return ss.str();
+}
+} // namespace
+
+TEST_F(SimulationManager, ExceptionIsWrittenToErrorLog) {
+    auto factory = std::make_unique<MockRunFactory>();
+    EXPECT_CALL(*factory, create(_, _, _, _, _))
+        .WillOnce([](const auto&, const auto&, const auto&, const auto&, const auto&)
+                   -> std::unique_ptr<dm::ISimulationRun> {
+            throw std::runtime_error("map file not found");
+        });
+
+    dm::SimulationManager manager(std::move(factory));
+    (void)manager.run(makeComposition(1, 1, 1), "/tmp/test_mgr_log_exception");
+
+    const auto log_path = std::filesystem::path("/tmp/test_mgr_log_exception") / "output_results" / "error.log";
+    ASSERT_TRUE(std::filesystem::exists(log_path)) << "error.log not created";
+    const std::string contents = readFile(log_path);
+    EXPECT_THAT(contents, ::testing::HasSubstr("map file not found"));
+}
+
+TEST_F(SimulationManager, MissionErrorIsWrittenToErrorLog) {
+    auto factory = std::make_unique<MockRunFactory>();
+    EXPECT_CALL(*factory, create(_, _, _, _, _))
+        .WillOnce([](const auto&, const auto&, const auto&, const auto&, const auto&) {
+            return std::make_unique<MockSimRun>(errResult());
+        });
+
+    dm::SimulationManager manager(std::move(factory));
+    (void)manager.run(makeComposition(1, 1, 1), "/tmp/test_mgr_log_mission_err");
+
+    const auto log_path = std::filesystem::path("/tmp/test_mgr_log_mission_err") / "output_results" / "error.log";
+    ASSERT_TRUE(std::filesystem::exists(log_path)) << "error.log not created";
+    const std::string contents = readFile(log_path);
+    EXPECT_THAT(contents, ::testing::HasSubstr("ERR"));
 }
