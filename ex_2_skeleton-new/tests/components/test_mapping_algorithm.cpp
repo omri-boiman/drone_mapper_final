@@ -11,9 +11,11 @@ using namespace drone_mapper;
 namespace {
 
 types::MappingBounds defaultBounds() {
+    // 100×100×100 cm at 10 cm resolution = 10×10×10 voxels.
+    // Physical max = 100 cm < 200 cm → algorithm uses fine 5.625° sweep step (64 rotations).
     return {
-        0.0*x_extent[cm], 200.0*x_extent[cm],
-        0.0*y_extent[cm], 200.0*y_extent[cm],
+        0.0*x_extent[cm], 100.0*x_extent[cm],
+        0.0*y_extent[cm], 100.0*y_extent[cm],
         0.0*z_extent[cm], 100.0*z_extent[cm],
     };
 }
@@ -144,7 +146,7 @@ TEST_F(MappingAlgorithm, ScanOrientationPresentOnEveryWorkingStep) {
 }
 
 // The initial 360° sweep must issue only Right-direction Rotate commands.
-// defaultBounds = 20×20×10 voxels → rot_step=5.625° → 64 steps.
+// defaultBounds = 10×10×10 voxels, 100 cm physical → rot_step=5.625° → 64 steps.
 TEST_F(MappingAlgorithm, InitialSweepCommandsAreRotateRight) {
     auto output_map = makeOutputMap();
     MappingAlgorithmImpl algo({}, {}, defaultDrone(), output_map);

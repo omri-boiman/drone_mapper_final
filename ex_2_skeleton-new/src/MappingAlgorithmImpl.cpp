@@ -46,13 +46,20 @@ void MappingAlgorithmImpl::initialize(const types::DroneState& /*state*/) {
     // the structure weight only adds noise inside the building.  Disable it for them.
     // Medium/large drones need it to prefer interior (many walls) over exterior sky.
     w_struct_ = (phys_r2_ >= 1.0) ? 4.0 : 0.0;
-    // Use finer 5.625° scan step for compact maps (≤20 voxels in each dim); larger maps
-    // need the mobility gained from fewer scan steps per sweep.
+    // [CHANGE: Fix 2 — Use physical map size to choose sweep rotation step]
+    // Use finer 5.625° step (64 rotations) for maps whose largest physical dimension is
+    // < 200 cm — these are the small 1 cm-resolution test maps where angular precision
+    // matters.  For large physical maps (≥ 200 cm, e.g. the 10 cm-resolution input
+    // scenarios), use 11.25° (32 rotations) to double the number of frontier visits
+    // within the fixed step budget.  The old threshold was raw voxel count ≤ 20, which
+    // accidentally put the 20-voxel × 10 cm = 200 cm map in the fine-step bucket,
+    // cutting available frontier visits by half.
     const auto& b   = map_cfg_.boundaries;
     const double xv = (b.max_x.force_numerical_value_in(cm) - b.min_x.force_numerical_value_in(cm)) / res_cm_;
     const double yv = (b.max_y.force_numerical_value_in(cm) - b.min_y.force_numerical_value_in(cm)) / res_cm_;
     const double zv = (b.max_height.force_numerical_value_in(cm) - b.min_height.force_numerical_value_in(cm)) / res_cm_;
-    rot_step_deg_   = (std::max({xv, yv, zv}) <= 20.0) ? 5.625 : 11.25;
+    rot_step_deg_   = (std::max({xv, yv, zv}) * res_cm_ < 200.0) ? 5.625 : 11.25;
+    // [END CHANGE: Fix 2]
     initialized_    = true;
     needs_scan_     = true;
 }
