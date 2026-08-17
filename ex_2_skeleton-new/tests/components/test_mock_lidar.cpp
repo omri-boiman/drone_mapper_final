@@ -145,6 +145,43 @@ TEST_F(MockLidar, ScanAtOppositeHeadingDetectsVoxelBehind) {
     EXPECT_FALSE(isMiss(west_result[0])) << "Scanning west should detect the voxel at 20cm";
 }
 
+TEST_F(MockLidar, ObstacleExactlyAtMaxRangeIsDetected) {
+    // Voxel at (20, 40, 20), drone at (0, 40, 20) facing east — distance is exactly 20cm.
+    // z_max=20cm means the voxel sits exactly on the far edge of the beam's range and
+    // must still be sampled and reported as a hit (not clipped short of z_max).
+    auto map = singleVoxelMap();
+    dm::MockGPS gps{
+        {0.0*dm::x_extent[dm::cm], 40.0*dm::y_extent[dm::cm], 20.0*dm::z_extent[dm::cm]},
+        {0.0*dm::horizontal_angle[dm::deg], 0.0*dm::altitude_angle[dm::deg]},
+        10.0*dm::cm};
+    dm::types::LidarConfigData lidar_cfg{5.0*dm::cm, 20.0*dm::cm, 2.5*dm::cm, 1};
+    dm::MockLidar lidar(lidar_cfg, map, gps);
+
+    const auto result = lidar.scan({0.0*dm::horizontal_angle[dm::deg], 0.0*dm::altitude_angle[dm::deg]});
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_FALSE(isMiss(result[0])) << "Voxel exactly at z_max should still be detected";
+    EXPECT_NEAR(result[0].distance.force_numerical_value_in(dm::cm), 20.0, 0.5);
+}
+
+TEST_F(MockLidar, ObstacleExactlyAtMinRangeIsDetectedNotTooClose) {
+    // Voxel at (20, 40, 20), drone at (0, 40, 20) facing east — distance is exactly 20cm,
+    // and z_min is also 20cm. A hit exactly at z_min must be reported with its real distance,
+    // not treated as "too close" (which would report distance 0).
+    auto map = singleVoxelMap();
+    dm::MockGPS gps{
+        {0.0*dm::x_extent[dm::cm], 40.0*dm::y_extent[dm::cm], 20.0*dm::z_extent[dm::cm]},
+        {0.0*dm::horizontal_angle[dm::deg], 0.0*dm::altitude_angle[dm::deg]},
+        10.0*dm::cm};
+    dm::types::LidarConfigData lidar_cfg{20.0*dm::cm, 60.0*dm::cm, 2.5*dm::cm, 1};
+    dm::MockLidar lidar(lidar_cfg, map, gps);
+
+    const auto result = lidar.scan({0.0*dm::horizontal_angle[dm::deg], 0.0*dm::altitude_angle[dm::deg]});
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_FALSE(isMiss(result[0]));
+    EXPECT_NEAR(result[0].distance.force_numerical_value_in(dm::cm), 20.0, 0.5)
+        << "Hit exactly at z_min should report its real distance, not be marked too-close (0)";
+}
+
 TEST_F(MockLidar, FovCircles4Has85Beams) {
     auto map = emptyMap();
     dm::MockGPS gps{

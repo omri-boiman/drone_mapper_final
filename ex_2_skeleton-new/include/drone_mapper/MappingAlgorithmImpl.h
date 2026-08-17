@@ -1,5 +1,6 @@
 #pragma once
 
+#include <drone_mapper/GridCell3D.h>
 #include <drone_mapper/IMappingAlgorithm.h>
 
 #include <deque>

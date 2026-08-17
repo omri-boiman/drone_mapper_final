@@ -6,6 +6,16 @@
 #include <filesystem>
 #include <vector>
 
+namespace drone_mapper::types {
+
+// Not part of the staff-provided interface — implementation detail of YamlConfigParser's
+// comparison-config parsing, kept out of types/MapTypes.h on purpose.
+struct ComparisonMapConfig {
+    MapConfig map_config{};
+};
+
+} // namespace drone_mapper::types
+
 namespace drone_mapper {
 
 class YamlConfigParser {

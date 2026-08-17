@@ -8,6 +8,9 @@
 #include <drone_mapper/IMappingAlgorithm.h>
 #include <drone_mapper/IMutableMap3D.h>
 #include <drone_mapper/Map3DImpl.h>
+#include <drone_mapper/ScanResultToVoxels.h>
+
+#include <limits>
 
 using namespace drone_mapper;
 using ::testing::Return;
@@ -291,4 +294,82 @@ TEST_F(DroneControl, ScanHitIsAppliedToOutputMap) {
     const Position3D mid_pos{65.0*x_extent[cm], 50.0*y_extent[cm], 50.0*z_extent[cm]};
     EXPECT_EQ(real_map.atVoxel(mid_pos), types::VoxelOccupancy::Empty)
         << "Voxel along beam before hit must be marked Empty";
+}
+
+TEST_F(DroneControl, NegativeElevateDistanceIsNotTruncated) {
+    ON_CALL(algo, nextStep(_, _)).WillByDefault(Return(
+        types::MappingStepCommand{
+            types::MovementCommand{types::MovementCommandType::Elevate,
+                                   types::RotationDirection::Left,
+                                   0.0*horizontal_angle[deg], -20.0*cm},
+            std::nullopt, types::AlgorithmStatus::Working}));
+    EXPECT_CALL(movement, elevate(_)).WillOnce([&](PhysicalLength d) {
+        EXPECT_DOUBLE_EQ(d.force_numerical_value_in(cm), -20.0)
+            << "Negative elevate distance must be passed through, not truncated to 0";
+        return types::MovementResult{true};
+    });
+    DroneControlImpl ctrl(defaultDrone(), defaultMission(), {}, lidar, gps, movement, map, algo);
+    std::ignore = ctrl.step();
+}
+
+TEST_F(DroneControl, FirstStepIncreasesStepIndex) {
+    DroneControlImpl ctrl(defaultDrone(), defaultMission(), {}, lidar, gps, movement, map, algo);
+    EXPECT_EQ(ctrl.state().step_index, 0u);
+    std::ignore = ctrl.step();
+    EXPECT_EQ(ctrl.state().step_index, 1u)
+        << "The very first call to step() must increment the step index";
+}
+
+TEST_F(DroneControl, LatestScanDoesNotLeakPastOneStep) {
+    // Step 1: no prior scan (nullptr), algorithm requests a scan.
+    // Step 2: prior scan from step 1 is visible (non-null), algorithm requests nothing.
+    // Step 3: latest_scan_ must have been cleared by step 2 — scan_ptr is nullptr again,
+    // not the stale scan from step 1.
+    const Orientation east{0.0*horizontal_angle[deg], 0.0*altitude_angle[deg]};
+    ON_CALL(lidar, scan(_)).WillByDefault(Return(types::LidarScanResult{{30.0*cm, east}}));
+
+    ::testing::Sequence seq;
+    EXPECT_CALL(algo, nextStep(_, ::testing::IsNull()))
+        .InSequence(seq)
+        .WillOnce(Return(types::MappingStepCommand{std::nullopt, east, types::AlgorithmStatus::Working}));
+    EXPECT_CALL(algo, nextStep(_, ::testing::NotNull()))
+        .InSequence(seq)
+        .WillOnce(Return(types::MappingStepCommand{std::nullopt, std::nullopt, types::AlgorithmStatus::Working}));
+    EXPECT_CALL(algo, nextStep(_, ::testing::IsNull()))
+        .InSequence(seq)
+        .WillOnce(Return(types::MappingStepCommand{std::nullopt, std::nullopt, types::AlgorithmStatus::Working}));
+
+    DroneControlImpl ctrl(defaultDrone(), defaultMission(), {}, lidar, gps, movement, map, algo);
+    std::ignore = ctrl.step();
+    std::ignore = ctrl.step();
+    std::ignore = ctrl.step();
+}
+
+TEST_F(DroneControl, ApplyToMapSkipsWhenScanOriginOutOfBounds) {
+    ON_CALL(map, isInBounds(_)).WillByDefault(Return(false));
+    EXPECT_CALL(map, set(_, _)).Times(0);
+    types::LidarScanResult scan{{30.0*cm, defaultHeading()}};
+    types::LidarConfigData lidar_cfg{5.0*cm, 80.0*cm, 2.5*cm, 1};
+    ScanResultToVoxels::applyToMap(map, defaultPos(), defaultHeading(), scan, lidar_cfg);
+}
+
+TEST_F(DroneControl, MissBeamDoesNotMarkEndpointOccupied) {
+    types::MappingBounds b{
+        0.0*x_extent[cm], 200.0*x_extent[cm],
+        0.0*y_extent[cm], 200.0*y_extent[cm],
+        0.0*z_extent[cm], 200.0*z_extent[cm],
+    };
+    Map3DImpl real_map(b, 10.0*cm, Position3D{});
+    const Position3D origin{50.0*x_extent[cm], 50.0*y_extent[cm], 50.0*z_extent[cm]};
+    const Orientation east{0.0*horizontal_angle[deg], 0.0*altitude_angle[deg]};
+    types::LidarConfigData lidar_cfg{5.0*cm, 40.0*cm, 2.5*cm, 1};
+
+    // A miss is encoded as distance == max double.
+    types::LidarScanResult scan{{std::numeric_limits<double>::max()*cm, east}};
+    ScanResultToVoxels::applyToMap(real_map, origin, east, scan, lidar_cfg);
+
+    // Endpoint at z_max (40cm east of origin) must not be marked Occupied on a miss.
+    const Position3D endpoint{90.0*x_extent[cm], 50.0*y_extent[cm], 50.0*z_extent[cm]};
+    EXPECT_NE(real_map.atVoxel(endpoint), types::VoxelOccupancy::Occupied)
+        << "A miss must not mark the beam endpoint as Occupied";
 }

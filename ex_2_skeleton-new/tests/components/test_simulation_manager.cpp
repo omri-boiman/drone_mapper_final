@@ -224,6 +224,36 @@ TEST_F(SimulationManager, ExceptionIsWrittenToErrorLog) {
     EXPECT_THAT(contents, ::testing::HasSubstr("map file not found"));
 }
 
+TEST_F(SimulationManager, AllMissionsFailedRunIsStillAggregated) {
+    auto factory = std::make_unique<MockRunFactory>();
+    EXPECT_CALL(*factory, create(_, _, _, _, _))
+        .Times(1)
+        .WillOnce([](const auto&, const auto&, const auto&, const auto&, const auto&) {
+            return std::make_unique<MockSimRun>(errResult());
+        });
+
+    dm::SimulationManager manager(std::move(factory));
+    const auto report = manager.run(makeComposition(1, 1, 1), "/tmp/test_mgr_all_failed");
+    ASSERT_EQ(report.runs.size(), 1u)
+        << "A run whose missions all failed must still be aggregated into report.runs";
+    EXPECT_EQ(report.runs[0].mission_results[0].status, dm::types::MissionRunStatus::Error);
+}
+
+TEST_F(SimulationManager, ScoreRangeStaysZeroToHundredEvenWithErrors) {
+    auto factory = std::make_unique<MockRunFactory>();
+    EXPECT_CALL(*factory, create(_, _, _, _, _))
+        .Times(1)
+        .WillOnce([](const auto&, const auto&, const auto&, const auto&, const auto&) {
+            return std::make_unique<MockSimRun>(errResult());
+        });
+
+    dm::SimulationManager manager(std::move(factory));
+    const auto report = manager.run(makeComposition(1, 1, 1), "/tmp/test_mgr_score_range");
+    EXPECT_DOUBLE_EQ(std::get<0>(report.score_range), 0.0)
+        << "score_range minimum must stay 0.0; error_score carries the error sentinel separately";
+    EXPECT_DOUBLE_EQ(std::get<1>(report.score_range), 100.0);
+}
+
 TEST_F(SimulationManager, MissionErrorIsWrittenToErrorLog) {
     auto factory = std::make_unique<MockRunFactory>();
     EXPECT_CALL(*factory, create(_, _, _, _, _))

@@ -95,6 +95,34 @@ TEST_F(MappingAlgorithm, EventuallyFinishesOnSmallMap) {
     EXPECT_TRUE(finished) << "Algorithm did not finish within 1000 steps on tiny map";
 }
 
+TEST_F(MappingAlgorithm, FinishesWhenEntireMapIsTooCloseWalls) {
+    // Every voxel is PotentiallyOccupied ("too close" hits everywhere), so nothing
+    // is ever navigable (navigable() requires Empty). The algorithm must still
+    // terminate instead of looping forever.
+    types::MappingBounds tiny_bounds{
+        0.0*x_extent[cm], 50.0*x_extent[cm],
+        0.0*y_extent[cm], 50.0*y_extent[cm],
+        0.0*z_extent[cm], 50.0*z_extent[cm],
+    };
+    Map3DImpl output_map(tiny_bounds, 50.0*cm);
+    output_map.set({25.0*x_extent[cm], 25.0*y_extent[cm], 25.0*z_extent[cm]},
+                   types::VoxelOccupancy::PotentiallyOccupied);
+
+    MappingAlgorithmImpl algo({}, {}, defaultDrone(), output_map);
+    const auto state = stateAt(25, 25, 25);
+
+    bool finished = false;
+    for (int i = 0; i < 1000; ++i) {
+        const auto cmd = algo.nextStep(state, nullptr);
+        if (cmd.status == types::AlgorithmStatus::Finished ||
+            cmd.status == types::AlgorithmStatus::FinishedWithUnmappableVoxels) {
+            finished = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(finished) << "Algorithm did not finish when surrounded entirely by too-close walls";
+}
+
 TEST_F(MappingAlgorithm, ScanResultWithHitsDoesNotCrash) {
     auto output_map = makeOutputMap();
     MappingAlgorithmImpl algo({}, {}, defaultDrone(), output_map);

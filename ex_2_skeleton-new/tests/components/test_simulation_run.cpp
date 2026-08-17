@@ -124,6 +124,17 @@ TEST_F(SimulationRun, ErrorStatusSetsScoreMinusOne) {
     EXPECT_DOUBLE_EQ(result.mission_score, -1.0);
 }
 
+TEST_F(SimulationRun, ErrorMissionResultIsStillAddedToMissionResults) {
+    auto mock_mc = std::make_unique<MockMissionCtrl>();
+    EXPECT_CALL(*mock_mc, runMission()).WillOnce(Return(
+        types::MissionRunResult{types::MissionRunStatus::Error, 5, {}}));
+
+    const auto result = makeRun(std::move(mock_mc))->run();
+    ASSERT_FALSE(result.mission_results.empty())
+        << "An errored mission result must still be recorded in mission_results";
+    EXPECT_EQ(result.mission_results[0].status, types::MissionRunStatus::Error);
+}
+
 TEST_F(SimulationRun, MaxStepsStatusStillScored) {
     auto mock_mc = std::make_unique<MockMissionCtrl>();
     EXPECT_CALL(*mock_mc, runMission()).WillOnce(Return(

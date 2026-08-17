@@ -1,5 +1,7 @@
 #include <drone_mapper/MapsComparison.h>
 
+#include <drone_mapper/GridCell3D.h>
+
 #include <algorithm>
 #include <cmath>
 #include <set>

@@ -118,3 +118,26 @@ TEST_F(MapsComparison, HigherSimilarityScoresHigher) {
     EXPECT_GT(scores_close[0], scores_faraway[0])
         << "More similar map should score higher";
 }
+
+TEST_F(MapsComparison, NullTargetScoresMinusOneWithoutCrashing) {
+    dm::Map3DImpl origin("data_maps/single_voxel_x2_y4_z2.npy", 10.0*dm::cm);
+    auto blank = emptyMap();
+
+    const auto scores = dm::MapsComparison::compare(origin, {nullptr, &blank});
+    ASSERT_EQ(scores.size(), 2u);
+    EXPECT_DOUBLE_EQ(scores[0], -1.0) << "A null target must score -1.0, not dereference";
+    EXPECT_DOUBLE_EQ(scores[1], 0.0);
+}
+
+TEST_F(MapsComparison, MoreThanTwoTargetsAreAllCompared) {
+    dm::Map3DImpl origin("data_maps/single_voxel_x2_y4_z2.npy", 10.0*dm::cm);
+    dm::Map3DImpl identical("data_maps/single_voxel_x2_y4_z2.npy", 10.0*dm::cm);
+    auto blank1 = emptyMap();
+    auto blank2 = emptyMap();
+
+    const auto scores = dm::MapsComparison::compare(origin, {&identical, &blank1, &blank2});
+    ASSERT_EQ(scores.size(), 3u) << "All targets must be compared, including the last one";
+    EXPECT_DOUBLE_EQ(scores[0], 100.0);
+    EXPECT_DOUBLE_EQ(scores[1], 0.0);
+    EXPECT_DOUBLE_EQ(scores[2], 0.0);
+}
