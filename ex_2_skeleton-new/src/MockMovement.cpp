@@ -67,8 +67,9 @@ types::MovementResult MockMovement::advance(PhysicalLength distance) {
             (startY + t * dy) * y_extent[cm],
             startZ             * z_extent[cm],
         };
-        if (hidden_map_.atVoxel(sample) == types::VoxelOccupancy::Occupied)
+        if (hidden_map_.atVoxel(sample) == types::VoxelOccupancy::Occupied) {
             return {false, "DRONE_HITS_OBSTACLE"};
+        }
     }
 
     gps_.setPosition(Position3D{
@@ -96,8 +97,9 @@ types::MovementResult MockMovement::elevate(PhysicalLength distance) {
             startY               * y_extent[cm],
             (startZ + t * distCm) * z_extent[cm],
         };
-        if (hidden_map_.atVoxel(sample) == types::VoxelOccupancy::Occupied)
+        if (hidden_map_.atVoxel(sample) == types::VoxelOccupancy::Occupied) {
             return {false, "DRONE_HITS_OBSTACLE"};
+        }
     }
 
     gps_.setPosition(Position3D{

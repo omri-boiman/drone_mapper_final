@@ -153,6 +153,7 @@ bool MappingAlgorithmImpl::clearForBody(const Cell& c) const {
 
 bool MappingAlgorithmImpl::isFrontier(const Cell& c) const {
     if (!navigable(c)) return false;
+    if (!withinMissionBounds(c)) return false;
     // Only horizontal (dz=0) face-neighbours count.  Vertical Unmapped neighbours
     // are routinely present due to limited lidar elevation coverage (fov_circles) and
     // can never be fully resolved from accessible positions, so treating them as
@@ -164,6 +165,29 @@ bool MappingAlgorithmImpl::isFrontier(const Cell& c) const {
     }
     return false;
 }
+
+// [CHANGE: Fix 3 — Mission bounds enforcement]
+// Returns true if the voxel center lies within mission_config_.mission_bounds.
+// When mission_bounds is unset (max_x <= min_x), all cells pass — no restriction.
+// This prevents the drone from navigating into building sections or altitude ranges
+// that are outside the mission area, which could cause DRONE_HITS_OBSTACLE crashes
+// when the algorithm explores areas with false-Empty wall voxels.
+bool MappingAlgorithmImpl::withinMissionBounds(const Cell& c) const {
+    const auto& mb = mission_config_.mission_bounds;
+    const double max_x = mb.max_x.force_numerical_value_in(cm);
+    const double min_x = mb.min_x.force_numerical_value_in(cm);
+    if (max_x <= min_x) return true;  // unset — no restriction
+    const Position3D center = centerOf(c);
+    const double cx = center.x.force_numerical_value_in(cm);
+    const double cy = center.y.force_numerical_value_in(cm);
+    const double cz = center.z.force_numerical_value_in(cm);
+    return cx >= min_x && cx <= max_x &&
+           cy >= mb.min_y.force_numerical_value_in(cm) &&
+           cy <= mb.max_y.force_numerical_value_in(cm) &&
+           cz >= mb.min_height.force_numerical_value_in(cm) &&
+           cz <= mb.max_height.force_numerical_value_in(cm);
+}
+// [END CHANGE: Fix 3]
 
 // ---------------------------------------------------------------------------
 // Value-based frontier selection (Change 1 + 2)
@@ -210,6 +234,7 @@ MappingAlgorithmImpl::selectBestFrontier(const Cell& from) const {
         const Cell nb{from.x+d.x, from.y+d.y, from.z+d.z};
         if (dist.count(nb)) continue;
         if (stateOf(nb) == types::VoxelOccupancy::OutOfBounds) continue;
+        if (!withinMissionBounds(nb)) continue;
         dist[nb] = 1;
         if (isNav(nb)) q.push(nb);
     }
@@ -253,6 +278,7 @@ MappingAlgorithmImpl::selectBestFrontier(const Cell& from) const {
             const Cell nb{cur.x+d.x, cur.y+d.y, cur.z+d.z};
             if (dist.count(nb)) continue;
             if (stateOf(nb) == types::VoxelOccupancy::OutOfBounds) continue;
+            if (!withinMissionBounds(nb)) continue;
             dist[nb] = d_cur + 1;
             if (isNav(nb)) q.push(nb);
         }
@@ -311,6 +337,7 @@ MappingAlgorithmImpl::findPath3D(const Cell& from, const Cell& to) const {
             const Cell nb{cur.x + d.x, cur.y + d.y, cur.z + d.z};
             if (closed.count(nb)) continue;
             if (!clearForBody(nb)) continue;
+            if (!withinMissionBounds(nb)) continue;
             const int tg = g[cur] + 1;
             if (!g.count(nb) || tg < g[nb]) {
                 g[nb] = tg;

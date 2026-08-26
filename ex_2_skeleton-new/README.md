@@ -1,54 +1,23 @@
-# Assignment 2 Refactor Skeleton
+# Drone Mapper — Assignment 2
 
-This repository is a compilable skeleton for Assignment 2 in the 2026 Advanced
-Topics in Programming course. It intentionally provides interfaces, data types,
-dependency-injected component stubs, and a preserved mock LiDAR implementation.
-It **does not** implement the full simulator or mapping solution. You should not use ANY implementations provided in this repository (aside MockLidar).
+Full implementation of the drone-mapping simulator for TAU Advanced Topics in Programming 2026B.
 
-## Project Structure
-
-```text
-include/drone_mapper/      Public interfaces, data types, and skeleton classes
-src/                     Stub implementations and executable entry points
-data_maps/               Example NumPy voxel maps
-.devcontainer/           Development container setup
-CMakeLists.txt           CMake build configuration
-vcpkg.json               Dependency list
-```
-
-
-## Building
+## Quick Start
 
 ```bash
+# Build
 cmake --preset default
 cmake --build --preset default
+
+# Run simulation (from the inputs/ subdirectory so relative map paths resolve)
+cd inputs
+../build/drone_mapper_simulation sim_compose.yaml ../output_results/
+
+# Run tests
+./build/drone_mapper_simulation_test
 ```
 
-The main build targets are:
+See **readme.txt** for complete documentation: build instructions, run options,
+output file formats, and test filters.
 
-```text
-drone_mapper
-drone_mapper_simulation
-maps_comparison
-```
-
-## Running
-
-Simulator skeleton:
-
-```bash
-./build/drone_mapper_simulation [simulation.yaml] [output_path]
-```
-
-The skeleton wires explicit placeholder components and reports stub results.
-You should add YAML parsing, scenario composition, output writing, error
-logging, and real simulator behavior etc..
-
-Maps comparison skeleton:
-
-```bash
-./build/maps_comparison <map1_path> <map2_path> [resolution_ratio=<res1>/<res2>]
-```
-
-The provided `MapsComparison` implementation is only a placeholder. You
-should replace it with the required scoring behavior.
+See **bonus.txt** for bonus features implemented.

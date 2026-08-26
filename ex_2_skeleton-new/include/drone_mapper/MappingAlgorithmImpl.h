@@ -64,6 +64,11 @@ private:
     // Called only while bootstrap_done_ is false and drone cell is OutOfBounds.
     types::MappingStepCommand navigateToMap(const types::DroneState& state) const;
     // [END CHANGE: Fix 1]
+    // [CHANGE: Fix 3 — Mission bounds enforcement]
+    // Returns true if the cell center falls within mission_config_.mission_bounds.
+    // When mission_bounds is unset (max <= min), all cells pass (no restriction).
+    bool withinMissionBounds(const Cell& c) const;
+    // [END CHANGE: Fix 3]
 };
 
 } // namespace drone_mapper
