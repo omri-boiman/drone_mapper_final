@@ -1,6 +1,85 @@
-# Assignment 2 Skeleton HLD
+# Assignment 2 HLD
 
-This document describes the current high-level design of the Assignment 2 refactor skeleton. Most implementation classes are intentionally minimal stubs. `MockLidar` is the main exception: it preserves the provided mock sensor ray-marching behavior.
+**Student:** omri-boiman (boiman.omri@gmail.com)
+
+This document describes the high-level design of the Assignment 2 simulator, covering both the skeleton architecture and the student implementation of `MappingAlgorithmImpl`.
+
+---
+
+## Student Implementation — MappingAlgorithmImpl
+
+Only `MappingAlgorithmImpl.cpp` and `MappingAlgorithmImpl.h` were modified from the skeleton.
+
+### Algorithm Overview
+
+`MappingAlgorithmImpl` implements **frontier-based 3D exploration**. The drone iteratively selects the most informative unexplored region (frontier), navigates to it via 3D A\*, performs a 360° scan, and repeats until no reachable frontiers remain or the step budget is exhausted.
+
+Each call to `nextStep()` follows this priority order:
+
+1. **Bootstrap** — if the drone starts outside the map array (e.g. house scenario: drone at z=10 cm, map at z=150 cm), issue single Elevate/Advance commands until inside the map boundary.
+2. **Drain** — emit the next queued movement command from `pending_commands_`.
+3. **Scan** — on arrival at a waypoint, perform a 360° yaw sweep (32 or 64 steps depending on map size).
+4. **Select** — pick the best frontier via value-scored BFS.
+5. **Plan** — build a movement queue: A\* path → rotate + advance/elevate commands.
+
+### Frontier Selection
+
+A BFS expands navigable voxels from the drone's current cell. Each frontier is scored:
+
+```
+score = (gain + w_struct × structure) / (1 + β × dist)
+```
+
+- **gain** — Unmapped voxels in an L³ neighbourhood (information value)
+- **structure** — Occupied voxels in the same neighbourhood (interior preference for larger drones)
+- **dist** — BFS hop count from current position
+- **w\_struct** = 4.0 for drones whose radius spans ≥ 1 voxel; 0.0 for smaller drones
+- **β** = 0.15 (distance penalty)
+
+Two guards prevent loops: the last 8 targets are excluded (anti-oscillation), and any frontier attempted ≥ 5 times is permanently blacklisted.
+
+### 3D A\* Navigation
+
+A\* over the 6-connected voxel grid with Manhattan heuristic. A cell is passable (`clearForBody`) when:
+
+1. `stateOf(c) == Empty`
+2. No Occupied/PotentiallyOccupied/OutOfBounds voxel within the drone's spherical radius
+3. No horizontal face-neighbour is Unmapped (prevents hugging unresolved walls; vertical Unmapped neighbours are ignored to avoid deadlocks in buildings with limited-coverage lidar)
+4. Cell is within `mission_config_.mission_bounds`
+
+When the goal is unreachable, A\* falls back to the closest passable cell reached.
+
+### Key Fixes
+
+| Fix | Description |
+|-----|-------------|
+| **Bootstrap navigation** | Drone navigates into the map array before the first scan when it starts outside (house scenario). |
+| **Adaptive rotation step** | Maps with physical size < 200 cm use 5.625° steps (64/sweep) for higher angular density; larger maps use 11.25° (32/sweep) to fit more frontier visits within budget. |
+| **Mission bounds enforcement** | Frontier BFS, A\* path planning, and `isFrontier` all reject cells outside `mission_config_.mission_bounds`. Prevents the drone from entering building sections or altitude ranges outside the mission area — the root cause of latent `DRONE_HITS_OBSTACLE` crashes at extended step budgets. |
+
+### Navigability — Two Levels
+
+Two predicates control cell access:
+
+| Predicate | Used by | Unmapped sphere neighbours | Unmapped horizontal face |
+|-----------|---------|--------------------------|--------------------------|
+| `navigable()` | Frontier BFS | ✗ blocked | allowed |
+| `clearForBody()` | A\* path planning | ✗ blocked | ✗ blocked |
+
+`navigable()` is looser: it allows the drone to stand next to an Unmapped wall (that is the point of a frontier). `clearForBody()` is strict: it blocks any horizontal Unmapped face-neighbour to prevent the path from hugging walls that haven't been observed yet.
+
+### Termination
+
+The algorithm declares `FinishedWithUnmappableVoxels` in two cases:
+
+- `selectBestFrontier` returns the sentinel cell even after clearing the anti-oscillation guard (no reachable frontier remains).
+- `stuck_scan_count_` exceeds 10 — the drone has performed 10 consecutive full sweeps without moving, meaning the remaining frontiers are unreachable from any accessible position.
+
+### Scan Coverage
+
+Each waypoint triggers a 360° sweep. All scan requests use altitude = 0° (horizontal) as required. The `output_mapping_resolution_factor: 2` setting in each professor mission config aligns the output map resolution (5 cm × 2 = 10 cm) with the hidden map resolution, ensuring correct voxel-level comparison during scoring.
+
+---
 
 ## Main Components
 
@@ -289,15 +368,6 @@ sequenceDiagram
     Run-->>Run: assemble SimulationResult with score, output path, and output MapConfig
 ```
 
-## Current Stub Boundaries
+## Implementation Status
 
-The attached stub implementations are examples only. You should provide their own implementations for:
-
-- YAML parsing and composition loading.
-- Mission execution and drone step loops.
-- Movement legality checks.
-- Output-map mutation and real `.npy` serialization.
-- Scan-to-voxel conversion.
-- Mapping algorithm behavior.
-- Map comparison scoring.
-- Simulation output writing and error-log writing.
+All skeleton components have been fully implemented: YAML parsing, mission execution, drone step loop, movement legality checks, output-map mutation and `.npy` serialization, scan-to-voxel conversion, map comparison scoring, and simulation output/error-log writing. The only student-authored files are `MappingAlgorithmImpl.cpp` and `MappingAlgorithmImpl.h`.

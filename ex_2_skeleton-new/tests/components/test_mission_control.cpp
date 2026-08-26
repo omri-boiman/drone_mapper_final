@@ -115,3 +115,35 @@ TEST_F(MissionControl, SavesOutputMapFile) {
 
     EXPECT_TRUE(std::filesystem::exists(out));
 }
+
+TEST_F(MissionControl, SavesOutputMapEvenOnError) {
+    auto hidden = makeHiddenMap();
+    auto output = makeOutputMap();
+    MockDroneCtrl ctrl;
+
+    ON_CALL(ctrl, step()).WillByDefault(Return(
+        types::DroneStepResult{types::DroneStepStatus::Error, "DRONE_HITS_OBSTACLE"}));
+    ON_CALL(ctrl, state()).WillByDefault(Return(types::DroneState{}));
+
+    const std::filesystem::path out = "/tmp/test_mission_error_saves.npy";
+    std::filesystem::remove(out);
+    MissionControlImpl mc(mission(), drone(), hidden, output, ctrl, out);
+    std::ignore = mc.runMission();
+
+    EXPECT_TRUE(std::filesystem::exists(out)) << "Output map must be saved even on error";
+}
+
+TEST_F(MissionControl, ImmediateCompleteGivesZeroSteps) {
+    auto hidden = makeHiddenMap();
+    auto output = makeOutputMap();
+    MockDroneCtrl ctrl;
+
+    ON_CALL(ctrl, step()).WillByDefault(Return(types::DroneStepResult{types::DroneStepStatus::Completed}));
+    ON_CALL(ctrl, state()).WillByDefault(Return(types::DroneState{}));
+
+    MissionControlImpl mc(mission(), drone(), hidden, output, ctrl, "/tmp/mc_zero_steps.npy");
+    const auto result = mc.runMission();
+
+    EXPECT_EQ(result.status, types::MissionRunStatus::Completed);
+    EXPECT_EQ(result.steps, 0u);
+}

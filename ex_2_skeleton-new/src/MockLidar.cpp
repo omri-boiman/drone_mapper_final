@@ -30,6 +30,10 @@ namespace {
 MockLidar::MockLidar(types::LidarConfigData config, const IMap3D& map, const IGPS& gps)
     : config_(config), map_(map), gps_(gps) {}
 
+types::LidarConfigData MockLidar::config() const {
+    return config_;
+}
+
 types::LidarScanResult MockLidar::scan(Orientation scan_orientation) const {
     types::LidarScanResult results;
     if (config_.fov_circles == 0) {
@@ -50,7 +54,7 @@ types::LidarScanResult MockLidar::scan(Orientation scan_orientation) const {
         const PhysicalLength radius = static_cast<double>(circle) * config_.d;
 
         for (std::size_t i = 0; i < beam_count; ++i) {
-            const auto theta = (360.0 * static_cast<double>(i) / static_cast<double>(beam_count)) * deg; // explicit static cast for proofing
+            const auto theta = (360.0 * static_cast<double>(i) / static_cast<double>(beam_count)) * deg;
             const PhysicalLength horizontal_offset = radius * si::cos(theta);
             const PhysicalLength altitude_offset = radius * si::sin(theta);
 
@@ -81,11 +85,9 @@ PhysicalLength MockLidar::traceBeam(const Orientation& beam_orientation) const {
     const auto dy = cos_altitude * si::sin(beam_orientation.horizontal);
     const auto dz = si::sin(beam_orientation.altitude);
 
-    // step based on size of the map's resolution
     const PhysicalLength step = 0.1 * map_.getMapConfig().resolution;
 
     for (PhysicalLength distance = 0.0 * cm; distance <= config_.z_max; distance += step) {
-        // Computing target voxel position
         const double distance_cm = distance.force_numerical_value_in(cm);
         const double dir_x = dx.force_numerical_value_in(mp::one);
         const double dir_y = dy.force_numerical_value_in(mp::one);
@@ -103,7 +105,6 @@ PhysicalLength MockLidar::traceBeam(const Orientation& beam_orientation) const {
             return distance;
         }
     }
-    // Beam never returns
     return std::numeric_limits<double>::max() * cm;
 }
 

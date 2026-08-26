@@ -6,22 +6,28 @@
 #include <filesystem>
 #include <vector>
 
-namespace drone_mapper {
+namespace drone_mapper::types {
 
-// Config for maps_comparison when loaded from a comparison_config YAML
+// Not part of the staff-provided interface — implementation detail of YamlConfigParser's
+// comparison-config parsing, kept out of types/MapTypes.h on purpose.
 struct ComparisonMapConfig {
-    types::MapConfig map_config{};
+    MapConfig map_config{};
 };
+
+} // namespace drone_mapper::types
+
+namespace drone_mapper {
 
 class YamlConfigParser {
 public:
-    // Internal struct carrying the skeleton composition data plus parallel file paths
-    // (one path per entry in each vector, in the same order).
+    // Internal struct carrying the skeleton composition data plus parallel file paths.
     // Do NOT modify the skeleton types — paths live here instead.
     struct CompositionWithPaths {
         types::SimulationCompositionData data;
+        // Parallel to data.simulation_mission_groups — one entry per sim.
         std::vector<std::filesystem::path> sim_paths;
-        std::vector<std::filesystem::path> mission_paths;
+        // mission_paths_per_sim[si][mi] = path for the mi-th mission of the si-th sim.
+        std::vector<std::vector<std::filesystem::path>> mission_paths_per_sim;
         std::vector<std::filesystem::path> drone_paths;
         std::vector<std::filesystem::path> lidar_paths;
     };
@@ -34,7 +40,7 @@ public:
     static types::LidarConfigData      parseLidar(const std::filesystem::path& path);
 
     // Parse comparison_config YAML; returns {origin, target} MapConfig pair
-    static std::pair<ComparisonMapConfig, ComparisonMapConfig>
+    static std::pair<types::ComparisonMapConfig, types::ComparisonMapConfig>
     parseComparisonConfig(const std::filesystem::path& path);
 };
 

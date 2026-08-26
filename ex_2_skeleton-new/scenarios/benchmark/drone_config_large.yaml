@@ -1,0 +1,6 @@
+# Large drone: 3cm diameter, fits through 4x4 main entrance
+drone_config:
+  dimensions_cm: 3
+  max_rotate_deg: 45
+  max_advance_cm: 3
+  max_elevate_cm: 3

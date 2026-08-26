@@ -1,0 +1,27 @@
+Bonus Features
+==============
+
+## 1. Supporting different output resolution requests
+
+The mission config field `output_mapping_resolution_factor` is fully supported:
+
+- Factor >= 1 : output map is created at `gps_resolution_cm * factor` resolution.
+  The score report records `resolution_request_status: ACCEPTED` and the actual
+  `resolution_cm` used.
+- Factor < 1  : request is ignored (too small). Output map falls back to
+  `gps_resolution_cm`. Score report records `resolution_request_status: IGNORED TOO SMALL`.
+- Factor == 1 : same as GPS resolution; accepted and reported as ACCEPTED.
+
+The output map is a real Map3D allocated at the requested resolution — not just
+a label. MapsComparison handles comparing maps at different resolutions by
+resampling voxels to a common grid.
+
+To verify:
+  - Set `output_mapping_resolution_factor: 2` in any mission config and run the
+    simulation. Check `simulation_output.yaml` for `resolution_cm` and
+    `resolution_request_status: ACCEPTED`.
+  - Set `output_mapping_resolution_factor: 0` and observe
+    `resolution_request_status: IGNORED TOO SMALL`.
+
+No specific test filter is required — the behaviour is exercised by the
+integration tests and by `SimulationRun.ResolutionStatusPropagatedToResult`.

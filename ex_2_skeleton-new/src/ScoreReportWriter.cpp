@@ -64,32 +64,6 @@ void ScoreReportWriter::write(const types::SimulationManagerReport& report,
     const double max_score = scored_scores.empty() ? 0.0
         : *std::max_element(scored_scores.begin(), scored_scores.end());
 
-    // Recover per-run paths using the deterministic iteration order:
-    // SimulationManager iterates: for each sim, for each mission, for each drone, for each lidar
-    const std::size_t n_s = paths.sim_paths.size();
-    const std::size_t n_m = paths.mission_paths.size();
-    const std::size_t n_d = paths.drone_paths.size();
-    const std::size_t n_l = paths.lidar_paths.size();
-
-    auto simPathFor = [&](std::size_t idx) -> std::string {
-        if (n_m == 0 || n_d == 0 || n_l == 0) return "";
-        const std::size_t si = idx / (n_m * n_d * n_l);
-        return si < n_s ? paths.sim_paths[si].string() : "";
-    };
-    auto missionPathFor = [&](std::size_t idx) -> std::string {
-        if (n_d == 0 || n_l == 0) return "";
-        const std::size_t mi = (idx / (n_d * n_l)) % n_m;
-        return mi < n_m ? paths.mission_paths[mi].string() : "";
-    };
-    auto dronePathFor = [&](std::size_t idx) -> std::string {
-        if (n_l == 0) return "";
-        const std::size_t di = (idx / n_l) % n_d;
-        return di < n_d ? paths.drone_paths[di].string() : "";
-    };
-    auto lidarPathFor = [&](std::size_t idx) -> std::size_t {
-        return idx % n_l;
-    };
-
     // Build YAML
     YAML::Node root;
     YAML::Node score_report;
@@ -121,74 +95,66 @@ void ScoreReportWriter::write(const types::SimulationManagerReport& report,
     }
     score_report["summary"] = summary;
 
-    // Group runs: sim → missions → drone/lidar runs
-    // We use string keys to detect group boundaries
+    // Build simulations section using the same nested iteration order as SimulationManager.
+    // IMPORTANT: yaml-cpp's Node::operator=(Node()) resets NodeData in-place, so all
+    // previously-pushed sequence references see the mutation. We avoid reusing YAML::Node
+    // variables across iterations by declaring them fresh in each loop scope.
+    const std::size_t n_d = paths.drone_paths.size();
+    const std::size_t n_l = paths.lidar_paths.size();
     YAML::Node simulations_node(YAML::NodeType::Sequence);
+    std::size_t run_idx = 0;
 
-    std::string cur_sim_path, cur_mission_path;
-    YAML::Node  cur_sim_node, cur_mission_node;
+    for (std::size_t si = 0; si < paths.sim_paths.size(); ++si) {
+        YAML::Node sim_node;
+        sim_node["simulation_config"] = paths.sim_paths[si].string();
 
-    for (std::size_t i = 0; i < report.runs.size(); ++i) {
-        const auto& run  = report.runs[i];
-        const std::string sp = simPathFor(i);
-        const std::string mp = missionPathFor(i);
+        const auto& missions = std::get<1>(paths.data.simulation_mission_groups[si]);
+        const auto& mpaths   = si < paths.mission_paths_per_sim.size()
+                                    ? paths.mission_paths_per_sim[si]
+                                    : std::vector<std::filesystem::path>{};
 
-        if (sp != cur_sim_path) {
-            // Flush previous mission and sim
-            if (!cur_mission_path.empty()) {
-                cur_sim_node["missions"].push_back(cur_mission_node);
+        for (std::size_t mi = 0; mi < missions.size(); ++mi) {
+            YAML::Node mission_node;
+            mission_node["mission_config"] =
+                mi < mpaths.size() ? mpaths[mi].string() : "";
+
+            const auto& first_run = run_idx < report.runs.size()
+                ? report.runs[run_idx] : types::SimulationResult{};
+            mission_node["resolution_cm"] = static_cast<int>(
+                first_run.output_map_config.resolution.force_numerical_value_in(cm));
+            mission_node["resolution_request_status"] =
+                resStatusStr(first_run.resolution_request_status);
+
+            for (std::size_t di = 0; di < n_d; ++di) {
+                for (std::size_t li = 0; li < n_l; ++li) {
+                    if (run_idx >= report.runs.size()) break;
+                    const auto& run = report.runs[run_idx++];
+
+                    YAML::Node run_node;
+                    run_node["drone_config"] = di < paths.drone_paths.size()
+                        ? paths.drone_paths[di].string() : "";
+                    run_node["lidar_config"] = li < paths.lidar_paths.size()
+                        ? paths.lidar_paths[li].string() : "";
+
+                    const auto& mr = run.mission_results.empty()
+                        ? types::MissionRunResult{}
+                        : run.mission_results[0];
+                    run_node["status"] = statusStr(mr.status);
+                    run_node["steps"]  = static_cast<int>(mr.steps);
+                    {
+                        std::ostringstream ss;
+                        ss << std::fixed << std::setprecision(1) << run.mission_score;
+                        run_node["score"] = ss.str();
+                    }
+                    if (mr.status == types::MissionRunStatus::Error && !mr.errors.empty()) {
+                        run_node["error_ref"]["code"] = mr.errors[0].code;
+                    }
+                    mission_node["runs"].push_back(run_node);
+                }
             }
-            if (!cur_sim_path.empty()) {
-                simulations_node.push_back(cur_sim_node);
-            }
-            cur_sim_path    = sp;
-            cur_mission_path = "";
-            cur_sim_node    = YAML::Node();
-            cur_sim_node["simulation_config"] = sp;
+            sim_node["missions"].push_back(mission_node);
         }
-
-        if (mp != cur_mission_path) {
-            if (!cur_mission_path.empty()) {
-                cur_sim_node["missions"].push_back(cur_mission_node);
-            }
-            cur_mission_path = mp;
-            cur_mission_node = YAML::Node();
-            cur_mission_node["mission_config"] = mp;
-            cur_mission_node["resolution_cm"] = static_cast<int>(
-                run.output_map_config.resolution.force_numerical_value_in(cm));
-            cur_mission_node["resolution_request_status"] =
-                resStatusStr(run.resolution_request_status);
-        }
-
-        // Per-run entry
-        YAML::Node run_node;
-        run_node["drone_config"] = dronePathFor(i);
-        const std::size_t li = lidarPathFor(i);
-        run_node["lidar_config"] = li < n_l ? paths.lidar_paths[li].string() : "";
-
-        const auto& mr = run.mission_results.empty()
-            ? types::MissionRunResult{}
-            : run.mission_results[0];
-        run_node["status"] = statusStr(mr.status);
-        run_node["steps"]  = static_cast<int>(mr.steps);
-        {
-            std::ostringstream ss;
-            ss << std::fixed << std::setprecision(1) << run.mission_score;
-            run_node["score"] = ss.str();
-        }
-        if (mr.status == types::MissionRunStatus::Error && !mr.errors.empty()) {
-            run_node["error_ref"]["code"] = mr.errors[0].code;
-        }
-
-        cur_mission_node["runs"].push_back(run_node);
-    }
-
-    // Flush last mission and sim
-    if (!cur_mission_path.empty()) {
-        cur_sim_node["missions"].push_back(cur_mission_node);
-    }
-    if (!cur_sim_path.empty()) {
-        simulations_node.push_back(cur_sim_node);
+        simulations_node.push_back(sim_node);
     }
 
     score_report["simulations"] = simulations_node;
