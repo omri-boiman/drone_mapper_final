@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
@@ -131,8 +132,23 @@ void Map3DImpl::save(const std::filesystem::path& path) const {
 
     const char* err = nullptr;
     if (is_output_map_) {
-        err = NpyArray::SaveNPY(path.string(), output_data_,
-                                NpyArray::shape_t{x_size_, y_size_, z_size_});
+        // Deliberately NOT using the NpyArray::SaveNPY(filename, vector, shape)
+        // convenience overload here: it wraps our vector's own buffer in a
+        // "borrowed, do not delete" NpyArray, where non-ownership is encoded as
+        // a NEGATIVE NpyArray::type (a plain `char`). On platforms where `char`
+        // is unsigned by default -- e.g. aarch64/ARM Linux, per the platform
+        // ABI, unlike x86 -- that negative value wraps around to a large
+        // positive one, so NpyArray::OwnData() incorrectly reports true and
+        // its destructor `delete[]`s our std::vector's own storage, corrupting
+        // the heap (double free) the moment the vector is later destroyed.
+        // Building our own explicitly-OWNING NpyArray instead (Allocate() +
+        // copy) sidesteps this: `type` is assigned a positive dtype code we
+        // choose ourselves, so ownership is correct regardless of whether
+        // `char` is signed on the target platform.
+        NpyArray arr(NpyArray::shape_t{x_size_, y_size_, z_size_}, sizeof(int8_t), 'i');
+        arr.Allocate();
+        std::memcpy(arr.Data<int8_t>(), output_data_.data(), output_data_.size());
+        err = arr.SaveNPY(path.string());
     } else {
         err = map_->SaveNPY(path.string());
     }

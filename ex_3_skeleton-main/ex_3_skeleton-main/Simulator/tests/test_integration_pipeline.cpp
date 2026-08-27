@@ -107,3 +107,37 @@ TEST_F(Integration, MapLoadsAs29x30x31Voxels) {
     EXPECT_NEAR(cfg.boundaries.max_y.force_numerical_value_in(common::cm), 30.0, 0.5);
     EXPECT_NEAR(cfg.boundaries.max_height.force_numerical_value_in(common::cm), 31.0, 0.5);
 }
+
+// Ported from ex2's tests/integration/test_integration_mock_algo.cpp. Same
+// intent as ex2's originals (a Finished-on-first-call algorithm produces a
+// 0-step Completed mission with an output map file) reusing the stub
+// factories the tests above already use, since real Algorithm/MissionControl
+// are separate dlopen'd .so projects here (see StubPlugins.h) rather than
+// something Simulator's own test binary can construct directly.
+TEST_F(Integration, MockAlgorithmRun_CompletesImmediately) {
+    sim::SimulationManager manager(makeStubFactory());
+
+    sim::types::SimulationManagerReport report;
+    ASSERT_NO_THROW(report = manager.run(singleVoxelComposition(), "/tmp/integration_mock_algo"));
+
+    ASSERT_GE(report.runs.size(), 1u);
+    const auto& run = report.runs[0];
+    ASSERT_FALSE(run.mission_results.empty());
+    EXPECT_EQ(run.mission_results[0].status, common::types::MissionRunStatus::Completed);
+    EXPECT_EQ(run.mission_results[0].steps, 0u);
+}
+
+TEST_F(Integration, MockAlgorithmRun_OutputMapFileExists) {
+    sim::SimulationManager manager(makeStubFactory());
+
+    const std::filesystem::path out = "/tmp/integration_mock_file_check";
+    std::filesystem::remove_all(out);
+    std::ignore = manager.run(singleVoxelComposition(), out);
+
+    bool found_npy = false;
+    for (const auto& entry :
+         std::filesystem::recursive_directory_iterator(out / "output_results")) {
+        if (entry.path().extension() == ".npy") { found_npy = true; break; }
+    }
+    EXPECT_TRUE(found_npy) << "Output map .npy was not created under " << out;
+}

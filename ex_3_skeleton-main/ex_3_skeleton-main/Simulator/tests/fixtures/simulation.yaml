@@ -1,0 +1,12 @@
+simulation_config:
+  map_filename: "data_maps/single_voxel_x2_y4_z2.npy"
+  map_resolution_cm: 10
+  initial_drone_position:
+    x_cm: 5
+    y_cm: 5
+    height_cm: 5
+  initial_angle_deg: 0
+  map_axes_offset:
+    x_offset: 0
+    y_offset: 0
+    height_offset: 0
