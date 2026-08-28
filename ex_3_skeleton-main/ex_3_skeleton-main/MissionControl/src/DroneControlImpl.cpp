@@ -1,6 +1,7 @@
 #include <MissionControl/DroneControlImpl.h>
 #include <MissionControl/ScanResultToVoxels.h>
 
+#include <stdexcept>
 #include <utility>
 
 namespace mission_control_211781141_325049575 {
@@ -41,18 +42,25 @@ types::DroneStepResult DroneControlImpl::step() {
     if (cmd.movement.has_value()) {
         const auto& mv = *cmd.movement;
         types::MovementResult result{true, {}};
-        switch (mv.type) {
-            case types::MovementCommandType::Rotate:
-                result = movement_.rotate(mv.rotation, mv.angle);
-                break;
-            case types::MovementCommandType::Advance:
-                result = movement_.advance(mv.distance);
-                break;
-            case types::MovementCommandType::Elevate:
-                result = movement_.elevate(mv.distance);
-                break;
-            default:
-                break;
+        try {
+            switch (mv.type) {
+                case types::MovementCommandType::Rotate:
+                    result = movement_.rotate(mv.rotation, mv.angle);
+                    break;
+                case types::MovementCommandType::Advance:
+                    result = movement_.advance(mv.distance);
+                    break;
+                case types::MovementCommandType::Elevate:
+                    result = movement_.elevate(mv.distance);
+                    break;
+                default:
+                    break;
+            }
+        } catch (const std::exception& e) {
+            // Mandatory per "Common issues and handling": a movement driver may throw
+            // on a colliding movement; the drone controller catches and reports it.
+            ++step_index_;
+            return {types::DroneStepStatus::Error, e.what()};
         }
         ++step_index_;
         if (!result)

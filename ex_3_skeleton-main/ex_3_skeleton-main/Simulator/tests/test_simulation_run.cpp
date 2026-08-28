@@ -9,6 +9,8 @@
 #include <Simulator/MockMovement.h>
 #include <Simulator/SimulationRunImpl.h>
 
+#include <stdexcept>
+
 namespace sim = simulator;
 using ::testing::Return;
 using ::testing::_;
@@ -191,16 +193,15 @@ TEST_F(SimulationRun, Movement_AdvanceSucceedsOnEmptyPath) {
     EXPECT_TRUE(result.success);
 }
 
-TEST_F(SimulationRun, Movement_AdvanceFailsWhenObstacleInPath) {
+TEST_F(SimulationRun, Movement_AdvanceThrowsWhenObstacleInPath) {
     sim::Map3DImpl obstacle_map("data_maps/single_voxel_x2_y4_z2.npy", 10.0*sim::cm);
     common::types::DroneConfigData drone_cfg{30.0*sim::cm, 45.0*sim::horizontal_angle[sim::deg], 50.0*sim::cm, 40.0*sim::cm};
     sim::MockGPS gps{{0.0*sim::x_extent[sim::cm], 40.0*sim::y_extent[sim::cm], 20.0*sim::z_extent[sim::cm]},
                 {0.0*sim::horizontal_angle[sim::deg], 0.0*sim::altitude_angle[sim::deg]}, 10.0*sim::cm};
     sim::MockMovement movement(gps, obstacle_map, drone_cfg);
 
-    const auto result = movement.advance(30.0*sim::cm);
-    EXPECT_FALSE(result.success);
-    EXPECT_EQ(result.message, "DRONE_HITS_OBSTACLE");
+    // Mandatory per "Common issues and handling": a colliding movement throws.
+    EXPECT_THROW(movement.advance(30.0*sim::cm), std::runtime_error);
 }
 
 TEST_F(SimulationRun, Movement_RotateUpdatesHeading) {

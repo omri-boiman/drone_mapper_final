@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <numbers>
+#include <stdexcept>
 
 namespace simulator {
 
@@ -68,7 +69,7 @@ common::types::MovementResult MockMovement::advance(PhysicalLength distance) {
             startZ             * z_extent[cm],
         };
         if (hidden_map_.atVoxel(sample) == common::types::VoxelOccupancy::Occupied) {
-            return {false, "DRONE_HITS_OBSTACLE"};
+            throw std::runtime_error("DRONE_HITS_OBSTACLE");
         }
     }
 
@@ -98,7 +99,7 @@ common::types::MovementResult MockMovement::elevate(PhysicalLength distance) {
             (startZ + t * distCm) * z_extent[cm],
         };
         if (hidden_map_.atVoxel(sample) == common::types::VoxelOccupancy::Occupied) {
-            return {false, "DRONE_HITS_OBSTACLE"};
+            throw std::runtime_error("DRONE_HITS_OBSTACLE");
         }
     }
 
