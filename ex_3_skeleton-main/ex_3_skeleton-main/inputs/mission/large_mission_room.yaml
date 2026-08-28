@@ -11,4 +11,5 @@ mission_config:
       min_cm: 0
       max_cm: 150
   gps_resolution_cm: 5         # GPS expected measurement precision
+  output_mapping_resolution_factor: 2  # 5*2=10cm matches hidden map resolution
 
